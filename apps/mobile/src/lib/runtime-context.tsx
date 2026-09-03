@@ -42,6 +42,7 @@ import {
   sessionBusy,
   sessionCwd,
   shouldApplyRuntimeEvent,
+  submittedTurnIdentity,
   type NewSessionOptions,
   type SessionOptionChanges,
 } from './mobile-runtime';
@@ -118,13 +119,19 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
   const attachRequests = useRef(new Map<string, Promise<boolean>>());
   const persistTails = useRef(new Map<string, Promise<AgentSession>>());
   const persistTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  /** Advanced on every cache write of new local state, so a save reply that
+   * lands after newer runtime events cannot roll the cache back to the
+   * snapshot it saved. */
+  const cacheGenerations = useRef(new Map<string, number>());
   const pendingSteers = useRef(new Map<string, string[]>());
   const drainingQueues = useRef(new Set<string>());
   const sendPromptRef = useRef<
     ((session: AgentSession, prompt: string) => Promise<AgentSession>) | null
   >(null);
 
-  const cacheSession = useCallback((session: AgentSession) => {
+  /** Writes a session into the query cache without advancing its
+   * generation: the daemon's echo of a snapshot this client already holds. */
+  const writeSessionCache = useCallback((session: AgentSession) => {
     const profileId = daemon.activeProfile?.id;
     if (!profileId) return;
     queryClient.setQueryData(daemonKeys.session(profileId, session.id), session);
@@ -136,6 +143,15 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
       return { ...current, sessions };
     });
   }, [daemon.activeProfile?.id, queryClient]);
+
+  /** Caches new local state — a submission, a runtime event, an edit. */
+  const cacheSession = useCallback((session: AgentSession) => {
+    cacheGenerations.current.set(
+      session.id,
+      (cacheGenerations.current.get(session.id) ?? 0) + 1,
+    );
+    writeSessionCache(session);
+  }, [writeSessionCache]);
 
   /** Full session from the query cache, hydrating from the daemon when only
    * the list skeleton is known. A skeleton must never be persisted back — it
@@ -156,13 +172,26 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
 
   const persistOrdered = useCallback((session: AgentSession): Promise<AgentSession> => {
     const client = daemon.client;
-    if (!client) return Promise.reject(new Error('Waku daemon is disconnected'));
+    const profileId = daemon.activeProfile?.id;
+    if (!client || !profileId) return Promise.reject(new Error('Waku daemon is disconnected'));
+    const generation = cacheGenerations.current.get(session.id);
     const previous = persistTails.current.get(session.id);
     const operation = (previous ?? Promise.resolve(session))
       .catch(() => session)
       .then(() => persistSession(client, session))
       .then((saved) => {
-        cacheSession(saved);
+        // The reply describes the snapshot that was saved. Runtime events
+        // committed while it was in flight are newer than that snapshot, so
+        // once the cache has moved on keep it and take only what the daemon
+        // owns — turn checkpoints — from the reply.
+        if (cacheGenerations.current.get(session.id) === generation) {
+          writeSessionCache(saved);
+        } else {
+          const latest = queryClient.getQueryData<AgentSession>(
+            daemonKeys.session(profileId, session.id),
+          );
+          if (latest) writeSessionCache(withDaemonCheckpoints(latest, saved));
+        }
         return saved;
       });
     persistTails.current.set(session.id, operation);
@@ -170,7 +199,7 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
       if (persistTails.current.get(session.id) === operation) persistTails.current.delete(session.id);
     }).catch(() => {});
     return operation;
-  }, [cacheSession, daemon.client]);
+  }, [daemon.activeProfile?.id, daemon.client, queryClient, writeSessionCache]);
 
   const schedulePersist = useCallback((sessionId: string) => {
     const profileId = daemon.activeProfile?.id;
@@ -266,8 +295,12 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
       }
       if (event.event.kind === 'steerAccepted') {
         const payload = event.event.payload as { message?: string };
+        // The provider folded a steer into the live turn. Ours is pending
+        // here; another client's is not, and its message belongs in this
+        // transcript just the same — the desktop mirrors it too.
         const pending = pendingSteers.current.get(session.id)?.shift();
-        if (pending) {
+        const content = payload.message ?? pending;
+        if (content) {
           state.current = {
             ...state.current,
             messages: [
@@ -276,7 +309,7 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
                 id: clock.randomUUID(),
                 turn_id: state.current.turns.at(-1)?.id ?? null,
                 role: 'user',
-                content: payload.message ?? pending,
+                content,
                 created_at: clock.nowSeconds(),
                 streaming: false,
               },
@@ -470,6 +503,10 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
     }
 
     current = beginTurn(current, prompt, clock);
+    // The ids beginTurn gave the turn and its user message ride along with
+    // the prompt, so every other client attached to the runtime mirrors the
+    // same rows instead of minting its own.
+    const submitted = submittedTurnIdentity(current);
     cacheSession(current);
     current = await persistOrdered(current);
     try {
@@ -499,7 +536,11 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
         runtime.starting = false;
         setRuntimes((values) => ({ ...values, [current.id]: publicRuntime(runtime!) }));
       }
-      await client.request({ type: 'prompt', prompt }, current.id, runtime.runtimeId);
+      await client.request(
+        { type: 'prompt', prompt, turnId: submitted.turnId, messageId: submitted.messageId },
+        current.id,
+        runtime.runtimeId,
+      );
       setErrors((values) => removeKey(values, current.id));
       return current;
     } catch (cause) {
@@ -796,4 +837,22 @@ function removeKey<T>(record: Record<string, T | undefined>, key: string): Recor
 
 function errorMessage(cause: unknown): string {
   return cause instanceof Error && cause.message.trim() ? cause.message : String(cause);
+}
+
+/** The daemon captures ending checkpoints itself, so a reply's checkpoint for
+ * a turn is the one part of it that can be newer than the local cache. */
+function withDaemonCheckpoints(latest: AgentSession, saved: AgentSession): AgentSession {
+  let changed = false;
+  const turns = latest.turns.map((turn) => {
+    const stored = saved.turns.find((candidate) => candidate.turn_count === turn.turn_count);
+    if (
+      !stored?.checkpoint
+      || JSON.stringify(stored.checkpoint) === JSON.stringify(turn.checkpoint)
+    ) {
+      return turn;
+    }
+    changed = true;
+    return { ...turn, checkpoint: stored.checkpoint };
+  });
+  return changed ? { ...latest, turns } : latest;
 }
