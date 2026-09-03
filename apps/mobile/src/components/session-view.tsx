@@ -11,6 +11,7 @@ import {
   View,
 } from 'react-native';
 
+import { ActivitySheetHost } from '@/components/activity-sheet';
 import { AppSymbol } from '@/components/app-symbol';
 import { MobileComposer } from '@/components/mobile-composer';
 import { RenameDialog } from '@/components/rename-dialog';
@@ -156,17 +157,18 @@ export function SessionView({
       />
       <View style={styles.body}>
         {session ? (
-          <TranscriptList
-            headerInset={headerInset}
-            hydrated={!query.isPlaceholderData}
-            key={session.id}
-            offline={daemon.phase === 'error'}
-            ref={listRef}
-            running={running}
-            session={session}
-            onDevSample={devPrompt ? probe.sample : undefined}
-            onUnderHeaderChange={setUnderHeader}
-          />
+          <ActivitySheetHost key={session.id} session={session}>
+            <TranscriptList
+              headerInset={headerInset}
+              hydrated={!query.isPlaceholderData}
+              offline={daemon.phase === 'error'}
+              ref={listRef}
+              running={running}
+              session={session}
+              onDevSample={devPrompt ? probe.sample : undefined}
+              onUnderHeaderChange={setUnderHeader}
+            />
+          </ActivitySheetHost>
         ) : (
           <View style={styles.placeholder}>
             <SessionEmpty error={query.error} loading={query.isPending} missing={query.data === null} />

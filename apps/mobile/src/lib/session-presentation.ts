@@ -1,4 +1,5 @@
 import type {
+  ActivityItem,
   AgentSession,
   AgentTurn,
   Checkpoint,
@@ -8,6 +9,7 @@ import type {
   RuntimeMode,
   TranscriptBlock,
 } from '@waku/client';
+import { activitiesForBlock } from '@waku/client/event-reducer';
 import { turnAnswerStart, turnFoldLabel } from '@waku/client/transcript-presentation';
 
 import type { MarkdownBlock } from '../md/parse';
@@ -175,6 +177,33 @@ export function contextPercent(session: AgentSession): number | null {
   const usage = session.context_usage;
   if (!usage || !usage.window) return null;
   return Math.max(0, Math.min(100, Math.round((usage.tokens / usage.window) * 100)));
+}
+
+/**
+ * Locator for one activity, as handed to the detail sheet. Every stream
+ * commit deep-clones the session, so the sheet keeps this rather than the
+ * object and re-resolves against the freshest session on each render. The
+ * anchor pair names the block the card was built from; the id alone is the
+ * fallback for a block that moved.
+ */
+export interface ActivityTarget {
+  activityId: string;
+  turnId: string | null;
+  afterMessage: number;
+}
+
+export function findActivity(session: AgentSession, target: ActivityTarget): ActivityItem | null {
+  const blocks = session.transcript_blocks;
+  for (const block of blocks) {
+    if (block.turn_id !== target.turnId || block.after_message !== target.afterMessage) continue;
+    const hit = activitiesForBlock(block).find((activity) => activity.id === target.activityId);
+    if (hit) return hit;
+  }
+  for (const block of blocks) {
+    const hit = activitiesForBlock(block).find((activity) => activity.id === target.activityId);
+    if (hit) return hit;
+  }
+  return null;
 }
 
 /**

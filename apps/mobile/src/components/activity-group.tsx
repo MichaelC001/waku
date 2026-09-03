@@ -1,43 +1,31 @@
-import type { ActivityFileChange, ActivityItem, ActivityKind, TranscriptBlock } from '@waku/client';
+import type { ActivityItem, TranscriptBlock } from '@waku/client';
 import { activitiesForBlock } from '@waku/client/event-reducer';
 import {
   activityActionLabel,
-  activityDisclosureSections,
   activityFileChangeStats,
   activityHeaderTitle,
   activityPreview,
   activityRowDetail,
 } from '@waku/client/transcript-presentation';
-import type { SymbolViewProps } from 'expo-symbols';
-import { memo, useEffect, useReducer, useRef, useState } from 'react';
-import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { memo, useEffect, useState } from 'react';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { ACTIVITY_ICONS } from './activity-icons';
+import { activityHasDetail, useActivitySheet } from './activity-sheet';
 import { AppSymbol } from './app-symbol';
-import { DiffView } from './diff-view';
 import { useRowAnchor } from './transcript-anchor';
-import { MonoFont, NativeTint } from '@/constants/theme';
-import { useReducedMotion } from '@/hooks/use-reduced-motion';
+import { NativeTint } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
-import { applyAlpha } from '@/md/color';
-import { RowVeil, splitRunAtSpans } from '@/md/veil';
-
-const ACTIVITY_ICONS: Record<ActivityKind, SymbolViewProps['name']> = {
-  reasoning: { ios: 'sparkles', android: 'auto_awesome', web: 'auto_awesome' },
-  command: { ios: 'terminal', android: 'terminal', web: 'terminal' },
-  fileChange: { ios: 'pencil.line', android: 'edit', web: 'edit' },
-  fileRead: { ios: 'doc.text', android: 'description', web: 'description' },
-  fileSearch: { ios: 'doc.text.magnifyingglass', android: 'find_in_page', web: 'find_in_page' },
-  fileList: { ios: 'folder', android: 'folder', web: 'folder' },
-  search: { ios: 'globe', android: 'travel_explore', web: 'travel_explore' },
-  plan: { ios: 'checklist', android: 'checklist', web: 'checklist' },
-  tool: { ios: 'wrench.and.screwdriver', android: 'build', web: 'build' },
-};
 
 /**
- * Desktop's activity treatment: the group collapses to a single summary line
- * (the live activity's title while streaming, "Ran N commands · …" once
- * settled), auto-expanded only while live. Expanded rows hang off a left rail
- * as bordered cards headed by a bold action label.
+ * Desktop's activity treatment, sized for a phone: the group collapses to a
+ * single summary line (the live activity's title while streaming, "Ran N
+ * commands · …" once settled), auto-expanded only while live, with its rows
+ * hanging off a left rail as bordered cards headed by a bold action label.
+ * The cards never expand in place — tapping one opens the native detail
+ * sheet (`ActivitySheetHost`), so the transcript's scroll position stays
+ * out of the picture and the disclosure reads like every other one on the
+ * platform.
  */
 export const ActivityGroup = memo(function ActivityGroup({
   block,
@@ -75,7 +63,7 @@ export const ActivityGroup = memo(function ActivityGroup({
       {expanded && (
         <View style={[styles.rail, { borderLeftColor: theme.border }]}>
           {activities.map((activity) => (
-            <ActivityRow activity={activity} key={activity.id} />
+            <ActivityRow activity={activity} block={block} key={activity.id} />
           ))}
         </View>
       )}
@@ -83,31 +71,25 @@ export const ActivityGroup = memo(function ActivityGroup({
   );
 });
 
-function ActivityRow({ activity }: { activity: ActivityItem }) {
+function ActivityRow({ activity, block }: { activity: ActivityItem; block: TranscriptBlock }) {
   const theme = useTheme();
-  const keepTop = useRowAnchor();
-  const reasoningContent = activity.reasoning?.content.trim() ?? '';
-  const sections = activity.reasoning ? [] : activityDisclosureSections(activity);
-  const changes = activity.file_changes ?? [];
-  const images = activity.image_urls ?? [];
-  const hasDetail = Boolean(reasoningContent || sections.length || changes.length || images.length);
-  const [expanded, setExpanded] = useState(Boolean(activity.reasoning && !activity.complete));
-  const reasoningRow = Boolean(activity.reasoning);
-  useEffect(() => {
-    // Thinking stays open while it streams and folds shut when it completes.
-    if (reasoningRow) setExpanded(!activity.complete);
-  }, [activity.complete, reasoningRow]);
-  const preview = expanded || reasoningRow ? '' : activityPreview(activity);
+  const openSheet = useActivitySheet();
+  const hasDetail = activityHasDetail(activity);
+  const preview = activity.reasoning ? '' : activityPreview(activity);
   const rowDetail = activityRowDetail(activity) || preview;
   const fileStats = activityFileChangeStats(activity);
 
   return (
     <View style={[styles.card, { backgroundColor: theme.surface, borderColor: theme.border }]}>
       <Pressable
+        accessibilityHint={hasDetail ? 'Opens the details' : undefined}
         accessibilityRole={hasDetail ? 'button' : 'text'}
-        accessibilityState={hasDetail ? { expanded } : undefined}
         disabled={!hasDetail}
-        onPress={() => keepTop(() => setExpanded((value) => !value))}
+        onPress={() => openSheet({
+          activityId: activity.id,
+          turnId: block.turn_id,
+          afterMessage: block.after_message,
+        })}
         style={({ pressed }) => [
           styles.cardHeader,
           { backgroundColor: pressed && hasDetail ? theme.overlay : 'transparent' },
@@ -134,95 +116,21 @@ function ActivityRow({ activity }: { activity: ActivityItem }) {
             <Text style={{ color: theme.danger }}>−{fileStats.deletions}</Text>
           </Text>
         )}
-        <ActivityState activity={activity} expanded={expanded} hasDetail={hasDetail} />
+        <ActivityState activity={activity} hasDetail={hasDetail} />
       </Pressable>
-      {expanded && hasDetail && (
-        <View style={[styles.cardBody, { borderTopColor: theme.border }]}>
-          {reasoningRow ? (
-            <ReasoningText content={plainReasoning(reasoningContent)} live={!activity.complete} />
-          ) : (
-            <>
-              {sections.map((section) => (
-                <View key={section.kind} style={styles.section}>
-                  {section.label && (
-                    <Text style={[styles.sectionLabel, { color: theme.textTertiary }]}>
-                      {section.label}
-                    </Text>
-                  )}
-                  {section.content ? (
-                    <Text selectable style={[styles.monoText, { color: theme.textSecondary }]}>
-                      {boundedText(section.content)}
-                    </Text>
-                  ) : null}
-                </View>
-              ))}
-              {changes.map((change) => (
-                <FileChangeRow change={change} key={change.path} />
-              ))}
-              {images.map((url, index) => (
-                <Image
-                  key={index}
-                  resizeMode="contain"
-                  source={{ uri: url }}
-                  style={[styles.image, { backgroundColor: theme.inset }]}
-                />
-              ))}
-            </>
-          )}
-        </View>
-      )}
     </View>
   );
 }
 
-/** Streaming reasoning dissolves in like the desktop's strided reasoning
- * veil: appended text fades at half the message veil's tick rate, and text
- * present at mount is adopted at full opacity. */
-function ReasoningText({ content, live }: { content: string; live: boolean }) {
-  const theme = useTheme();
-  const reducedMotion = useReducedMotion();
-  const veil = useRef<RowVeil | null>(null);
-  veil.current ??= new RowVeil(content.length > 0);
-  const [, bump] = useReducer((count: number) => count + 1, 0);
-  const spans = live && !reducedMotion ? veil.current.advance(0, content, Date.now()) : [];
-  useEffect(() => {
-    if (!spans.length) return;
-    const timer = setTimeout(bump, 66);
-    return () => clearTimeout(timer);
-  });
-  return (
-    <Text selectable style={[styles.reasoningText, { color: theme.textSecondary }]}>
-      {splitRunAtSpans(0, content.length, spans).map(([start, end, opacity]) =>
-        opacity >= 1 ? (
-          content.slice(start, end)
-        ) : (
-          <Text key={start} style={{ color: applyAlpha(theme.textSecondary, opacity) }}>
-            {content.slice(start, end)}
-          </Text>
-        ),
-      )}
-    </Text>
-  );
-}
-
-/** Mirrors the desktop row's trailing state: chevron when there is detail,
- * nothing for finished reasoning, an alert for failures, a dot while live. */
-function ActivityState({
-  activity,
-  expanded,
-  hasDetail,
-}: {
-  activity: ActivityItem;
-  expanded: boolean;
-  hasDetail: boolean;
-}) {
+/** Mirrors the desktop row's trailing state: a disclosure chevron when there
+ * is detail to open, nothing for finished reasoning, an alert for failures,
+ * a dot while live. */
+function ActivityState({ activity, hasDetail }: { activity: ActivityItem; hasDetail: boolean }) {
   const theme = useTheme();
   if (hasDetail) {
     return (
       <AppSymbol
-        name={expanded
-          ? { ios: 'chevron.down', android: 'keyboard_arrow_down', web: 'keyboard_arrow_down' }
-          : { ios: 'chevron.right', android: 'chevron_right', web: 'chevron_right' }}
+        name={{ ios: 'chevron.right', android: 'chevron_right', web: 'chevron_right' }}
         size={10}
         tintColor={theme.textGhost}
       />
@@ -240,65 +148,6 @@ function ActivityState({
   }
   if (activity.complete) return null;
   return <View accessibilityLabel="Running" style={[styles.runningDot, { backgroundColor: NativeTint }]} />;
-}
-
-function FileChangeRow({ change }: { change: ActivityFileChange }) {
-  const theme = useTheme();
-  const keepTop = useRowAnchor();
-  const [open, setOpen] = useState(false);
-  const hasDiff = Boolean(change.diff?.trim());
-  const statusColor = change.status === 'added'
-    ? theme.success
-    : change.status === 'deleted'
-      ? theme.danger
-      : theme.warning;
-  return (
-    <View style={styles.fileChange}>
-      <Pressable
-        accessibilityRole={hasDiff ? 'button' : 'text'}
-        accessibilityState={hasDiff ? { expanded: open } : undefined}
-        disabled={!hasDiff}
-        onPress={() => keepTop(() => setOpen((value) => !value))}
-        style={({ pressed }) => [styles.fileRow, { opacity: pressed ? 0.6 : 1 }]}>
-        <View style={[styles.statusDot, { backgroundColor: statusColor }]} />
-        <Text numberOfLines={1} style={[styles.filePath, { color: theme.text }]}>
-          {change.path}
-        </Text>
-        {(change.additions != null || change.deletions != null) && (
-          <Text style={styles.stats}>
-            <Text style={{ color: theme.success }}>+{change.additions ?? 0}</Text>
-            <Text style={{ color: theme.textGhost }}> </Text>
-            <Text style={{ color: theme.danger }}>−{change.deletions ?? 0}</Text>
-          </Text>
-        )}
-        {hasDiff && (
-          <AppSymbol
-            name={open
-              ? { ios: 'chevron.down', android: 'keyboard_arrow_down', web: 'keyboard_arrow_down' }
-              : { ios: 'chevron.right', android: 'chevron_right', web: 'chevron_right' }}
-            size={10}
-            tintColor={theme.textGhost}
-          />
-        )}
-      </Pressable>
-      {open && change.diff ? <DiffView diff={change.diff} /> : null}
-    </View>
-  );
-}
-
-function boundedText(value: string): string {
-  const limit = 12_000;
-  return value.length <= limit ? value : `${value.slice(0, limit)}\n\n… Output truncated`;
-}
-
-/** Reasoning is throwaway thinking: render it as quiet plain text, never
- * heavier than the answer. Strips the markdown emphasis and heading markers
- * providers put on their summary headlines. */
-function plainReasoning(value: string): string {
-  return boundedText(value)
-    .replace(/\*\*([^*]+)\*\*/g, '$1')
-    .replace(/__([^_]+)__/g, '$1')
-    .replace(/^#{1,6}\s+/gm, '');
 }
 
 const styles = StyleSheet.create({
@@ -335,19 +184,4 @@ const styles = StyleSheet.create({
   rowSpacer: { flex: 1 },
   stats: { fontSize: 11.5, fontVariant: ['tabular-nums'], fontWeight: '600' },
   runningDot: { borderRadius: 3, height: 6, width: 6 },
-  cardBody: {
-    borderTopWidth: StyleSheet.hairlineWidth,
-    gap: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-  },
-  reasoningText: { fontSize: 12.5, lineHeight: 18 },
-  section: { gap: 3 },
-  sectionLabel: { fontSize: 11, fontWeight: '600' },
-  monoText: { fontFamily: MonoFont, fontSize: 11, lineHeight: 16 },
-  fileChange: { gap: 6 },
-  fileRow: { alignItems: 'center', flexDirection: 'row', gap: 7, minHeight: 24 },
-  statusDot: { borderRadius: 3, height: 6, width: 6 },
-  filePath: { flex: 1, fontFamily: MonoFont, fontSize: 11 },
-  image: { borderRadius: 8, height: 200, width: '100%' },
 });

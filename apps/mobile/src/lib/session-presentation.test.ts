@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type { AgentSession, AgentTurn, Project } from '@waku/client';
+import { activitiesForBlock } from '@waku/client/event-reducer';
 
 import { TranscriptMarkdownCache } from '../md/transcript-cache';
 import {
@@ -8,6 +9,7 @@ import {
   contextPercent,
   displaySessionTitle,
   expandTranscriptRows,
+  findActivity,
   groupSessions,
   relativeSessionTime,
   sessionDateGroup,
@@ -267,6 +269,50 @@ describe('mobile session presentation', () => {
     expect(stable[2]).not.toBe(before[2]!);
     expect(stable[2]!.kind === 'md' && stable[2].source).toBe('Two more');
     expect(stabilizeTranscriptRows(stable, stabilizeTranscriptRows(stable, after))).toBe(stable);
+  });
+});
+
+describe('activity sheet locator', () => {
+  test('resolves by the block anchor first, then by id alone', () => {
+    const early = activityBlock(0, 'turn');
+    const late = activityBlock(1, 'turn');
+    late.content = {
+      kind: 'activities',
+      data: [{ ...activitiesForBlock(late)[0]!, id: 'later', output: 'ok' }],
+    };
+    const current = session({ transcript_blocks: [early, late] });
+    expect(findActivity(current, { activityId: 'tool', turnId: 'turn', afterMessage: 0 }))
+      .toBe(activitiesForBlock(early)[0]!);
+    // The card's anchor no longer matches (the block moved after a rewind):
+    // the id still finds it.
+    expect(findActivity(current, { activityId: 'later', turnId: 'other', afterMessage: 9 }))
+      .toBe(activitiesForBlock(late)[0]!);
+    expect(findActivity(current, { activityId: 'gone', turnId: 'turn', afterMessage: 0 })).toBeNull();
+  });
+
+  test('survives the per-commit clone by resolving against the new session', () => {
+    const before = session({ transcript_blocks: [activityBlock(0, 'turn')] });
+    const after = JSON.parse(JSON.stringify(before)) as AgentSession;
+    activitiesForBlock(after.transcript_blocks[0]!)[0]!.output = 'streamed';
+    const target = { activityId: 'tool', turnId: 'turn', afterMessage: 0 };
+    expect(findActivity(before, target)?.output).toBeUndefined();
+    expect(findActivity(after, target)?.output).toBe('streamed');
+  });
+
+  test('names legacy reasoning blocks deterministically', () => {
+    const current = session({
+      transcript_blocks: [{
+        after_message: 1,
+        turn_id: 'turn',
+        content: { kind: 'reasoning', data: { content: 'hmm', started_at_ms: 0, finished_at_ms: 1 } },
+      }],
+    });
+    const found = findActivity(current, {
+      activityId: 'legacy-reasoning-1',
+      turnId: 'turn',
+      afterMessage: 1,
+    });
+    expect(found?.reasoning?.content).toBe('hmm');
   });
 });
 
