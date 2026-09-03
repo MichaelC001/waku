@@ -1,5 +1,4 @@
 import type {
-  ActivityItem,
   AgentSession,
   AgentTurn,
   Checkpoint,
@@ -9,7 +8,6 @@ import type {
   RuntimeMode,
   TranscriptBlock,
 } from '@waku/client';
-import { activitiesForBlock } from '@waku/client/event-reducer';
 import { turnAnswerStart, turnFoldLabel } from '@waku/client/transcript-presentation';
 
 import type { MarkdownBlock } from '../md/parse';
@@ -58,7 +56,16 @@ export type TranscriptRow =
       footerTimestamp: number | null;
       topGap: number;
     }
-  | { kind: 'activities'; key: string; turnId: string | null; block: TranscriptBlock; live: boolean; topGap: number }
+  | {
+      kind: 'activities';
+      key: string;
+      turnId: string | null;
+      block: TranscriptBlock;
+      /** Position in `session.transcript_blocks`: the sheet's locator hint. */
+      blockIndex: number;
+      live: boolean;
+      topGap: number;
+    }
   | {
       kind: 'fold';
       key: string;
@@ -180,30 +187,27 @@ export function contextPercent(session: AgentSession): number | null {
 }
 
 /**
- * Locator for one activity, as handed to the detail sheet. Every stream
+ * Locator for one tool group, as handed to the activity sheet. Every stream
  * commit deep-clones the session, so the sheet keeps this rather than the
- * object and re-resolves against the freshest session on each render. The
- * anchor pair names the block the card was built from; the id alone is the
- * fallback for a block that moved.
+ * block and re-resolves it against the freshest session on each render. The
+ * index is a hint checked against the anchor; a block that moved (a rewind
+ * dropped an earlier turn) is found again by its anchor.
  */
-export interface ActivityTarget {
-  activityId: string;
+export interface ActivityGroupTarget {
+  blockIndex: number;
   turnId: string | null;
   afterMessage: number;
 }
 
-export function findActivity(session: AgentSession, target: ActivityTarget): ActivityItem | null {
-  const blocks = session.transcript_blocks;
-  for (const block of blocks) {
-    if (block.turn_id !== target.turnId || block.after_message !== target.afterMessage) continue;
-    const hit = activitiesForBlock(block).find((activity) => activity.id === target.activityId);
-    if (hit) return hit;
-  }
-  for (const block of blocks) {
-    const hit = activitiesForBlock(block).find((activity) => activity.id === target.activityId);
-    if (hit) return hit;
-  }
-  return null;
+export function findActivityBlock(
+  session: AgentSession,
+  target: ActivityGroupTarget,
+): TranscriptBlock | null {
+  const matches = (block: TranscriptBlock) =>
+    block.turn_id === target.turnId && block.after_message === target.afterMessage;
+  const hinted = session.transcript_blocks[target.blockIndex];
+  if (hinted && matches(hinted)) return hinted;
+  return session.transcript_blocks.find(matches) ?? null;
 }
 
 /**
@@ -215,7 +219,7 @@ export function findActivity(session: AgentSession, target: ActivityTarget): Act
  */
 export type TranscriptPipelineRow =
   | { kind: 'message'; key: string; turnId: string | null; message: Message; footerTimestamp: number | null }
-  | { kind: 'activities'; key: string; turnId: string | null; block: TranscriptBlock; live: boolean }
+  | { kind: 'activities'; key: string; turnId: string | null; block: TranscriptBlock; blockIndex: number; live: boolean }
   | { kind: 'fold'; key: string; turnId: string | null; turn: AgentTurn; label: string; expanded: boolean }
   | { kind: 'changed'; key: string; turnId: string | null; checkpoint: Checkpoint };
 
@@ -271,6 +275,7 @@ export function buildTranscriptPipeline(
           key: `activity:${index}:${block.turn_id ?? 'none'}:${block.after_message}`,
           turnId: block.turn_id,
           block,
+          blockIndex: index,
           live: Boolean(
             runningTurnId && block.turn_id === runningTurnId && block === latestBlock &&
               block.after_message === session.messages.length,
