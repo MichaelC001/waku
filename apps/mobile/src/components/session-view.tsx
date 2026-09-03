@@ -1,7 +1,7 @@
 import * as Clipboard from 'expo-clipboard';
 import * as Haptics from 'expo-haptics';
-import { router } from 'expo-router';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { router, Stack, type NativeStackNavigationOptions } from 'expo-router';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   KeyboardAvoidingView,
@@ -18,9 +18,12 @@ import { RenameDialog } from '@/components/rename-dialog';
 import {
   HeaderAction,
   HeaderActionGroup,
+  HeaderTitle,
+  nativeHeaderButtons,
   navigateBack,
-  ScreenHeader,
+  ScreenHeaderBackdrop,
   useScreenHeaderInset,
+  type HeaderActionSpec,
 } from '@/components/screen-header';
 import { Sheet, SheetRow } from '@/components/sheet';
 import {
@@ -131,30 +134,46 @@ export function SessionView({
   const projectName = useTaskState().data?.projects
     .find((project) => project.id === session?.project_id)?.name;
   const subtitleParts = [projectName, daemon.activeProfile?.name].filter(Boolean);
+  const title = session ? displaySessionTitle(session) : 'Task';
+  const subtitle = subtitleParts.length ? subtitleParts.join(' · ') : null;
+  const hasSession = Boolean(session);
+
+  // The chrome lives in the native navigation bar, so it stays put while the
+  // page slides under a swipe-back. Keyed on the strings, not the session, so
+  // streaming updates never touch the bar.
+  const headerOptions = useMemo<NativeStackNavigationOptions>(() => {
+    const actions: HeaderActionSpec[] = hasSession
+      ? [
+          {
+            icon: { ios: 'square.and.pencil', android: 'edit_square', web: 'edit' },
+            label: 'New task',
+            onPress: () => router.push('/new-task'),
+          },
+          {
+            icon: { ios: 'ellipsis', android: 'more_horiz', web: 'more_horiz' },
+            label: 'Task options',
+            onPress: () => setMenuOpen(true),
+          },
+        ]
+      : [];
+    return {
+      headerTitle: () => <HeaderTitle subtitle={subtitle} title={title} />,
+      headerRight: actions.length
+        ? () => (
+            <HeaderActionGroup>
+              {actions.map((action) => <HeaderAction key={action.label} {...action} />)}
+            </HeaderActionGroup>
+          )
+        : undefined,
+      unstable_headerRightItems: actions.length ? () => nativeHeaderButtons(actions) : undefined,
+    };
+  }, [hasSession, subtitle, title]);
 
   return (
     <KeyboardAvoidingView
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       style={[styles.screen, { backgroundColor: theme.background }]}>
-      <ScreenHeader
-        scrolled={underHeader}
-        right={session ? (
-          <HeaderActionGroup>
-            <HeaderAction
-              icon={{ ios: 'square.and.pencil', android: 'edit_square', web: 'edit' }}
-              label="New task"
-              onPress={() => router.push('/new-task')}
-            />
-            <HeaderAction
-              icon={{ ios: 'ellipsis', android: 'more_horiz', web: 'more_horiz' }}
-              label="Task options"
-              onPress={() => setMenuOpen(true)}
-            />
-          </HeaderActionGroup>
-        ) : undefined}
-        subtitle={subtitleParts.length ? subtitleParts.join(' · ') : null}
-        title={session ? displaySessionTitle(session) : 'Task'}
-      />
+      <Stack.Screen options={headerOptions} />
       <View style={styles.body}>
         {session ? (
           <ActivitySheetHost key={session.id} session={session}>
@@ -180,6 +199,7 @@ export function SessionView({
           </View>
         )}
       </View>
+      <ScreenHeaderBackdrop visible={underHeader} />
       {session && (
         <MobileComposer
           session={session}
