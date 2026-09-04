@@ -20,6 +20,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AppSymbol } from '@/components/app-symbol';
+import { ComposerAccessMenu } from '@/components/composer-access-menu';
 import { DaemonPickerSheet } from '@/components/daemon-picker-sheet';
 import {
   ComposerCard,
@@ -29,7 +30,6 @@ import {
 import { RemoteProjectPicker } from '@/components/remote-project-picker';
 import { useScreenHeaderInset } from '@/components/screen-header';
 import {
-  AccessSheet,
   ModelPickerSheet,
   ModelTraitsSheet,
   type ProviderModelSelection,
@@ -64,8 +64,7 @@ type SheetKind =
   | 'model'
   | 'traits'
   | 'workspace'
-  | 'branch'
-  | 'access';
+  | 'branch';
 
 export default function NewTaskScreen() {
   const theme = useTheme();
@@ -416,14 +415,10 @@ export default function NewTaskScreen() {
           autoFocus
           editable={!submitting}
           left={(
-            <>
-              <ComposerIconButton
-                active={runtimeMode !== 'fullAccess'}
-                icon={{ ios: 'hand.raised', android: 'front_hand', web: 'pan_tool' }}
-                label="Agent access"
-                onPress={() => setOpenSheet('access')}
-              />
-            </>
+            <ComposerAccessMenu
+              mode={runtimeMode}
+              onApply={setRuntimeMode}
+            />
           )}
           placeholder={`Work on ${daemon.activeProfile?.name ?? 'your daemon'}`}
           right={(
@@ -541,12 +536,6 @@ export default function NewTaskScreen() {
         )}
       </Sheet>
 
-      <AccessSheet
-        mode={runtimeMode}
-        onApply={setRuntimeMode}
-        onDismiss={() => setOpenSheet(null)}
-        visible={openSheet === 'access'}
-      />
       <RemoteProjectPicker
         visible={projectPickerOpen}
         onDismiss={() => setProjectPickerOpen(false)}

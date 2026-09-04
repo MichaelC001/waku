@@ -8,6 +8,13 @@ import { Radius } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { runtimeModeLabel } from '@/lib/session-presentation';
 
+const MODE_ICONS = {
+  ask: { ios: 'lock', android: 'lock', web: 'lock' },
+  autoAcceptEdits: { ios: 'pencil', android: 'edit', web: 'edit' },
+  auto: { ios: 'sparkles', android: 'auto_awesome', web: 'auto_awesome' },
+  fullAccess: { ios: 'lock.open', android: 'lock_open', web: 'lock_open' },
+} as const;
+
 /** Non-iOS fallback. iOS replaces this with a native anchored menu. */
 export function ComposerAccessMenu({ mode, onApply }: ComposerAccessMenuProps) {
   const theme = useTheme();
@@ -20,11 +27,7 @@ export function ComposerAccessMenu({ mode, onApply }: ComposerAccessMenuProps) {
         accessibilityRole="button"
         onPress={() => setOpen(true)}
         style={({ pressed }) => [styles.trigger, { opacity: pressed ? 0.55 : 1 }]}>
-        <AppSymbol
-          name={{ ios: 'gearshape', android: 'settings', web: 'settings' }}
-          size={20}
-          tintColor={theme.textSecondary}
-        />
+        <AppSymbol name={MODE_ICONS[mode]} size={19} tintColor={theme.textSecondary} />
       </Pressable>
       <AccessSheet
         mode={mode}

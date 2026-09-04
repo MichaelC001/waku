@@ -48,6 +48,7 @@ const ACCESS_MODES: Array<{
  * composer trigger and receives the native popover arrow and dismissal model. */
 export function ComposerAccessMenu({ mode, onApply }: ComposerAccessMenuProps) {
   const theme = useTheme();
+  const selected = ACCESS_MODES.find((item) => item.id === mode) ?? ACCESS_MODES[3]!;
 
   return (
     <Host ignoreSafeArea="all" matchContents>
@@ -55,7 +56,7 @@ export function ComposerAccessMenu({ mode, onApply }: ComposerAccessMenuProps) {
         label={(
           <RNHostView matchContents>
             <View accessible={false} style={styles.trigger}>
-              <AppSymbol name="gearshape" size={20} tintColor={theme.textSecondary} />
+              <AppSymbol name={selected.icon} size={19} tintColor={theme.textSecondary} />
             </View>
           </RNHostView>
         )}
