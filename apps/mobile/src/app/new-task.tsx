@@ -267,7 +267,11 @@ export default function NewTaskScreen() {
         <SelectorRow
           icon={{ ios: 'laptopcomputer', android: 'laptop_mac', web: 'laptop_mac' }}
           label="Daemon"
-          loading={daemon.phase === 'connecting' || daemon.phase === 'booting'}
+          loading={
+            daemon.phase === 'connecting'
+            || daemon.phase === 'booting'
+            || daemon.phase === 'reconnecting'
+          }
           value={daemon.activeProfile?.name ?? 'Add a daemon'}
           onPress={() => setOpenSheet('daemon')}
         />

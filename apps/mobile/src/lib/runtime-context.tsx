@@ -117,6 +117,8 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
   const [errors, setErrors] = useState<Record<string, string | undefined>>({});
   const entries = useRef(new Map<string, RuntimeEntry>());
   const attachRequests = useRef(new Map<string, Promise<boolean>>());
+  /** The daemon connection count whose runtimes were last revalidated. */
+  const revalidatedConnections = useRef(0);
   const persistTails = useRef(new Map<string, Promise<AgentSession>>());
   const persistTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   /** Advanced on every cache write of new local state, so a save reply that
@@ -756,6 +758,44 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
     setErrors((values) => removeKey(values, sessionId));
   }, []);
 
+  // After a reconnect the daemon replays whatever each followed runtime
+  // emitted while the link was down, so streams resume by themselves. What
+  // it cannot replay is a runtime that no longer exists (the daemon
+  // restarted) or one another client replaced: confirm each entry's runtime
+  // and either drop it, so the next prompt starts fresh, or follow the new
+  // one, whose events are already buffered on the client.
+  useEffect(() => {
+    const client = daemon.client;
+    const profileId = daemon.activeProfile?.id;
+    if (!client || !profileId || daemon.phase !== 'connected') return;
+    if (daemon.connections <= 1 || revalidatedConnections.current === daemon.connections) return;
+    revalidatedConnections.current = daemon.connections;
+    for (const [sessionId, entry] of entries.current) {
+      void attachDaemonSession(client, sessionId).then((attached) => {
+        if (entries.current.get(sessionId) !== entry) return;
+        if (attached?.runtimeId === entry.runtimeId) return;
+        removeRuntime(sessionId);
+        if (attached) {
+          const current = queryClient.getQueryData<AgentSession>(
+            daemonKeys.session(profileId, sessionId),
+          );
+          if (current) subscribe(current, attached.runtimeId, attached.supportsSteer, false);
+        }
+        void queryClient.invalidateQueries({
+          queryKey: daemonKeys.session(profileId, sessionId),
+        });
+      }).catch(() => {});
+    }
+  }, [
+    daemon.activeProfile?.id,
+    daemon.client,
+    daemon.connections,
+    daemon.phase,
+    queryClient,
+    removeRuntime,
+    subscribe,
+  ]);
+
   // Another client (the desktop, the web app) persisting a session announces
   // itself through taskStateChanged. Refetch any hydrated session we are not
   // already following live, so watching a desktop-driven task stays current.
@@ -779,6 +819,7 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
     setPermissions({});
     setUserInputs({});
     setErrors({});
+    revalidatedConnections.current = 0;
     return () => {
       for (const entry of entries.current.values()) entry.unsubscribe();
       entries.current.clear();

@@ -27,7 +27,6 @@ import { useMarkdownStyles, VeilRegistry } from '@/components/md-block-row';
 import { RowAnchorProvider } from '@/components/transcript-anchor';
 import {
   EarlierIndicator,
-  OfflineBanner,
   SessionEmpty,
   TranscriptRowView,
   WorkingStrip,
@@ -103,7 +102,6 @@ export function TranscriptList({
   session,
   hydrated,
   running,
-  offline,
   headerInset,
   onUnderHeaderChange,
   onDevSample,
@@ -113,7 +111,6 @@ export function TranscriptList({
   /** False while the session is a task-list skeleton awaiting hydration. */
   hydrated: boolean;
   running: boolean;
-  offline: boolean;
   headerInset: number;
   onUnderHeaderChange: (under: boolean) => void;
   onDevSample?: (sample: TranscriptDevSample) => void;
@@ -490,7 +487,6 @@ export function TranscriptList({
         })}
         {/* Last child: the visual top, under the floating header. */}
         <View style={[styles.inverted, styles.column, { paddingTop: headerInset + 2 }]}>
-          {offline && <OfflineBanner />}
           {hasEarlier && <EarlierIndicator />}
         </View>
       </ScrollView>

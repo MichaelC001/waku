@@ -19,10 +19,10 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AppSymbol } from '@/components/app-symbol';
-import { ConnectionErrorCard } from '@/components/connection-error-card';
+import { ConnectionBanner, useConnectionNotice } from '@/components/connection-banner';
 import { GlassSurface } from '@/components/glass-surface';
 import { ProviderIcon, providerBrandColor } from '@/components/provider-icon';
-import { ConnectionStatus } from '@/components/connection-status';
+import { ConnectionStatus, connectionPhaseLabel } from '@/components/connection-status';
 import { RenameDialog } from '@/components/rename-dialog';
 import { useScreenHeaderInset } from '@/components/screen-header';
 import { Sheet, SheetRow } from '@/components/sheet';
@@ -165,13 +165,9 @@ export default function TasksScreen() {
               }}
             />
           )}
-          ListHeaderComponent={daemon.error ? <ConnectionErrorCard /> : null}
+          ListHeaderComponent={<ConnectionBanner />}
           ListEmptyComponent={(
-            <TaskListEmpty
-              connecting={daemon.phase === 'booting' || daemon.phase === 'connecting'}
-              error={taskState.error}
-              searching={Boolean(search.trim())}
-            />
+            <TaskListEmpty error={taskState.error} searching={Boolean(search.trim())} />
           )}
           showsVerticalScrollIndicator={false}
           stickySectionHeadersEnabled={false}
@@ -287,7 +283,7 @@ function DaemonPill() {
       <Pressable
         accessibilityHint="Opens the daemon switcher"
         accessibilityLabel={daemon.activeProfile
-          ? `Connected daemon: ${daemon.activeProfile.name}`
+          ? `${connectionPhaseLabel(daemon.phase)}: ${daemon.activeProfile.name}`
           : 'Add a daemon'}
         accessibilityRole="button"
         hitSlop={8}
@@ -356,22 +352,24 @@ function Onboarding() {
 }
 
 function TaskListEmpty({
-  connecting,
   error,
   searching,
 }: {
-  connecting: boolean;
   error: unknown;
   searching: boolean;
 }) {
   const theme = useTheme();
-  const { error: daemonError, phase } = useDaemon();
-  if (daemonError) return null;
-  if (connecting) {
+  const { phase } = useDaemon();
+  const notice = useConnectionNotice();
+  // The banner above the list is already explaining the wait.
+  if (notice && notice.kind !== 'restored') return null;
+  if (phase === 'booting' || phase === 'connecting' || phase === 'reconnecting') {
     return (
       <View style={styles.emptyState}>
         <ActivityIndicator color={theme.textTertiary} />
-        <Text style={[styles.emptyTitle, { color: theme.textSecondary }]}>Connecting to daemon…</Text>
+        <Text style={[styles.emptyTitle, { color: theme.textSecondary }]}>
+          {phase === 'reconnecting' ? 'Reconnecting…' : 'Connecting to daemon…'}
+        </Text>
       </View>
     );
   }

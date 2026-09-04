@@ -287,22 +287,6 @@ export function WorkingStrip({ session }: { session: AgentSession }) {
   );
 }
 
-export function OfflineBanner() {
-  const theme = useTheme();
-  return (
-    <View style={[styles.offlineBanner, { backgroundColor: theme.dangerSoft }]}>
-      <AppSymbol
-        name={{ ios: 'wifi.slash', android: 'wifi_off', web: 'wifi_off' }}
-        size={14}
-        tintColor={theme.danger}
-      />
-      <Text style={[styles.offlineText, { color: theme.danger }]}>
-        Reconnecting — showing cached messages
-      </Text>
-    </View>
-  );
-}
-
 /** Sits above the oldest mounted row while more history exists; the window
  * extends ahead of the reader so this is rarely on screen for long. */
 export function EarlierIndicator() {
@@ -340,15 +324,6 @@ export function SessionEmpty({
 }
 
 const styles = StyleSheet.create({
-  offlineBanner: {
-    alignItems: 'center',
-    borderRadius: Radius.medium,
-    flexDirection: 'row',
-    gap: 7,
-    marginBottom: 12,
-    padding: 10,
-  },
-  offlineText: { fontSize: 12.5, fontWeight: '600' },
   earlier: { alignItems: 'center', paddingVertical: 10 },
   userFrame: { alignItems: 'flex-end' },
   userBubble: {

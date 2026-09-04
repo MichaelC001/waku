@@ -13,7 +13,7 @@ import {
 } from 'react-native';
 
 import { AppSymbol } from '@/components/app-symbol';
-import { ConnectionErrorCard } from '@/components/connection-error-card';
+import { ConnectionBanner } from '@/components/connection-banner';
 import { ConnectionStatus } from '@/components/connection-status';
 import { DaemonAvatar } from '@/components/daemon-avatar';
 import { Radius, Spacing } from '@/constants/theme';
@@ -72,7 +72,7 @@ export default function DaemonsScreen() {
             <Text style={[styles.intro, { color: theme.textSecondary }]}>
               Switch hosts without re-entering credentials. Only the selected daemon stays connected.
             </Text>
-            {daemon.error ? <ConnectionErrorCard /> : null}
+            <ConnectionBanner />
           </>
         )}
         ListEmptyComponent={(

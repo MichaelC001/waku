@@ -251,7 +251,11 @@ export function MobileComposer({
 
   const disconnected = daemon.phase !== 'connected';
   const placeholder = disconnected
-    ? 'Reconnect to message this agent'
+    ? daemon.phase === 'reconnecting'
+      ? 'Reconnecting…'
+      : daemon.phase === 'connecting' || daemon.phase === 'booting'
+        ? 'Connecting…'
+        : 'Reconnect to message this agent'
     : canSteer
       ? 'Message the working agent…'
       : busy

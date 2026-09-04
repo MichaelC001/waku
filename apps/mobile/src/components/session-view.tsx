@@ -13,6 +13,7 @@ import {
 
 import { ActivitySheetHost } from '@/components/activity-sheet';
 import { AppSymbol } from '@/components/app-symbol';
+import { ConnectionBanner } from '@/components/connection-banner';
 import { MobileComposer } from '@/components/mobile-composer';
 import { RenameDialog } from '@/components/rename-dialog';
 import {
@@ -135,7 +136,14 @@ export function SessionView({
     .find((project) => project.id === session?.project_id)?.name;
   const subtitleParts = [projectName, daemon.activeProfile?.name].filter(Boolean);
   const title = session ? displaySessionTitle(session) : 'Task';
-  const subtitle = subtitleParts.length ? subtitleParts.join(' · ') : null;
+  // The bar's subtitle doubles as the quiet link indicator, the way messaging
+  // apps do it; the banner below only steps in when the outage persists.
+  const linkSubtitle = daemon.phase === 'reconnecting'
+    ? daemon.outage?.interrupted ? 'Reconnecting…' : 'Connecting…'
+    : daemon.phase === 'connecting' || daemon.phase === 'booting'
+      ? 'Connecting…'
+      : daemon.phase === 'error' ? 'Not connected' : null;
+  const subtitle = linkSubtitle ?? (subtitleParts.length ? subtitleParts.join(' · ') : null);
   const hasSession = Boolean(session);
 
   // The chrome lives in the native navigation bar, so it stays put while the
@@ -180,7 +188,6 @@ export function SessionView({
             <TranscriptList
               headerInset={headerInset}
               hydrated={!query.isPlaceholderData}
-              offline={daemon.phase === 'error'}
               ref={listRef}
               running={running}
               session={session}
@@ -193,6 +200,9 @@ export function SessionView({
             <SessionEmpty error={query.error} loading={query.isPending} missing={query.data === null} />
           </View>
         )}
+        <View pointerEvents="box-none" style={[styles.linkBanner, { top: headerInset + 8 }]}>
+          <ConnectionBanner floating />
+        </View>
         {Boolean(devPrompt && probe.text) && (
           <View pointerEvents="none" style={[styles.devBadge, { top: headerInset + 8 }]}>
             <Text style={styles.devBadgeText}>{probe.text}</Text>
@@ -319,6 +329,7 @@ const styles = StyleSheet.create({
   screen: { flex: 1 },
   body: { flex: 1 },
   placeholder: { alignItems: 'center', flex: 1, justifyContent: 'center', paddingHorizontal: 32 },
+  linkBanner: { left: 12, position: 'absolute', right: 12, zIndex: 10 },
   devBadge: {
     backgroundColor: 'rgba(0,0,0,0.75)',
     borderRadius: 6,
