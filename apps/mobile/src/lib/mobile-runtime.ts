@@ -14,6 +14,8 @@ export interface MobileRuntimeClock {
 export interface NewSessionOptions {
   model?: string | null;
   reasoningEffort?: string | null;
+  serviceTier?: string | null;
+  contextWindow?: string | null;
   runtimeMode?: RuntimeMode;
   /** Base branch for an isolated worktree; null means the project default. */
   baseBranch?: string | null;
@@ -83,8 +85,8 @@ export function createSession(
     model: options.model ?? null,
     runtime_mode: options.runtimeMode ?? 'fullAccess',
     reasoning_effort: options.reasoningEffort ?? null,
-    service_tier: null,
-    context_window: null,
+    service_tier: options.serviceTier ?? null,
+    context_window: options.contextWindow ?? null,
     agent_preset: null,
     status: 'idle',
     created_at: now,
@@ -151,6 +153,8 @@ export function sessionBusy(session: Pick<AgentSession, 'status'>): boolean {
 export interface SessionOptionChanges {
   model?: string | null;
   reasoningEffort?: string | null;
+  serviceTier?: string | null;
+  contextWindow?: string | null;
   runtimeMode?: RuntimeMode;
 }
 
@@ -164,6 +168,10 @@ export function applySessionOptions(
     model: changes.model !== undefined ? changes.model : session.model,
     reasoning_effort:
       changes.reasoningEffort !== undefined ? changes.reasoningEffort : session.reasoning_effort,
+    service_tier:
+      changes.serviceTier !== undefined ? changes.serviceTier : session.service_tier,
+    context_window:
+      changes.contextWindow !== undefined ? changes.contextWindow : session.context_window,
     runtime_mode: changes.runtimeMode ?? session.runtime_mode,
     updated_at: clock.nowSeconds(),
   };

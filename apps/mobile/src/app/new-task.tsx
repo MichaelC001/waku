@@ -1,6 +1,10 @@
 import { useQuery } from '@tanstack/react-query';
 import type { ProviderKind, RuntimeMode } from '@waku/client';
-import { rememberComposerSession } from '@waku/client/composer-preferences';
+import {
+  rememberedModelTraits,
+  rememberComposerSession,
+  type ComposerPreferences,
+} from '@waku/client/composer-preferences';
 import * as Haptics from 'expo-haptics';
 import { router } from 'expo-router';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -23,7 +27,12 @@ import {
 } from '@/components/mobile-composer';
 import { RemoteProjectPicker } from '@/components/remote-project-picker';
 import { useScreenHeaderInset } from '@/components/screen-header';
-import { AccessSheet, ModelPickerSheet } from '@/components/session-option-sheets';
+import {
+  AccessSheet,
+  ModelPickerSheet,
+  ModelTraitsSheet,
+  type ProviderModelSelection,
+} from '@/components/session-option-sheets';
 import { SessionView } from '@/components/session-view';
 import { Sheet, SheetRow } from '@/components/sheet';
 import { Radius, Spacing } from '@/constants/theme';
@@ -42,10 +51,21 @@ import {
   saveNewTaskExtras,
 } from '@/lib/composer-preferences-store';
 import { useDaemon } from '@/lib/daemon-context';
+import {
+  modelHasConfigurableTraits,
+  type ModelTraitSelection,
+} from '@/lib/model-traits';
 import { useRuntime } from '@/lib/runtime-context';
 import { providerLabel } from '@/lib/session-presentation';
 
-type SheetKind = 'daemon' | 'project' | 'model' | 'workspace' | 'branch' | 'access';
+type SheetKind =
+  | 'daemon'
+  | 'project'
+  | 'model'
+  | 'traits'
+  | 'workspace'
+  | 'branch'
+  | 'access';
 
 export default function NewTaskScreen() {
   const theme = useTheme();
@@ -59,6 +79,8 @@ export default function NewTaskScreen() {
   const [provider, setProvider] = useState<ProviderKind | null>(null);
   const [model, setModel] = useState<string | null>(null);
   const [reasoningEffort, setReasoningEffort] = useState<string | null>(null);
+  const [serviceTier, setServiceTier] = useState<string | null>(null);
+  const [contextWindow, setContextWindow] = useState<string | null>(null);
   const [runtimeMode, setRuntimeMode] = useState<RuntimeMode>('fullAccess');
   const [isolated, setIsolated] = useState(false);
   const [baseBranch, setBaseBranch] = useState<string | null>(null);
@@ -101,17 +123,26 @@ export default function NewTaskScreen() {
   useEffect(() => {
     if (provider && installedProviders.includes(provider)) return;
     const preferred = installedProviders.includes('codex') ? 'codex' : installedProviders[0];
-    if (preferred) setProvider(preferred);
+    if (preferred) {
+      setProvider(preferred);
+      setModel(null);
+      setReasoningEffort(null);
+      setServiceTier(null);
+      setContextWindow(null);
+    }
   }, [installedProviders, provider]);
 
-  // Restore the last-used composition (provider/model/effort via the shared
+  // Restore the last-used composition (provider/model traits via the shared
   // composer preferences, plus mobile extras) once per daemon.
   const [restoredAddress, setRestoredAddress] = useState<string | null>(null);
   const restoredFor = useRef<string | null>(null);
+  const preferencesRef = useRef<ComposerPreferences | null>(null);
   useEffect(() => {
     const address = daemon.activeProfile?.address;
     if (!address || restoredFor.current === address) return;
     restoredFor.current = address;
+    preferencesRef.current = null;
+    setRestoredAddress(null);
     void (async () => {
       const [prefs, extras] = await Promise.all([
         loadComposerPreferences(address),
@@ -123,6 +154,9 @@ export default function NewTaskScreen() {
       setProvider(prefs.lastProvider);
       setModel(prefs.lastModel);
       setReasoningEffort(prefs.lastReasoningEffort);
+      setServiceTier(prefs.lastServiceTier);
+      setContextWindow(prefs.lastContextWindow);
+      preferencesRef.current = prefs;
       setRestoredAddress(address);
     })();
   }, [daemon.activeProfile?.address]);
@@ -133,12 +167,28 @@ export default function NewTaskScreen() {
     const address = daemon.activeProfile?.address;
     if (!address || restoredAddress !== address) return;
     const timer = setTimeout(() => {
-      void loadComposerPreferences(address).then((prefs) => saveComposerPreferences(address, {
-        ...prefs,
-        ...(provider ? { lastProvider: provider } : {}),
-        lastModel: model,
-        lastReasoningEffort: reasoningEffort,
-      })).catch(() => {});
+      void loadComposerPreferences(address).then((stored) => {
+        const prefs = preferencesRef.current ?? stored;
+        let next: ComposerPreferences = {
+          ...prefs,
+          ...(provider ? { lastProvider: provider } : {}),
+          lastModel: model,
+          lastReasoningEffort: reasoningEffort,
+          lastServiceTier: serviceTier,
+          lastContextWindow: contextWindow,
+        };
+        if (provider && model) {
+          next = rememberComposerSession(next, {
+            provider,
+            model,
+            reasoning_effort: reasoningEffort,
+            service_tier: serviceTier,
+            context_window: contextWindow,
+          });
+        }
+        preferencesRef.current = next;
+        return saveComposerPreferences(address, next);
+      }).catch(() => {});
       void saveNewTaskExtras(address, {
         runtimeMode,
         isolated,
@@ -146,7 +196,18 @@ export default function NewTaskScreen() {
       }).catch(() => {});
     }, 300);
     return () => clearTimeout(timer);
-  }, [daemon.activeProfile?.address, isolated, model, projectId, provider, reasoningEffort, restoredAddress, runtimeMode]);
+  }, [
+    contextWindow,
+    daemon.activeProfile?.address,
+    isolated,
+    model,
+    projectId,
+    provider,
+    reasoningEffort,
+    restoredAddress,
+    runtimeMode,
+    serviceTier,
+  ]);
 
   // Cross-device draft: prefill from the daemon-persisted new-session draft
   // for this project, and persist edits back, debounced.
@@ -189,6 +250,34 @@ export default function NewTaskScreen() {
     };
   }
 
+  function applyModelSelection(selection: ProviderModelSelection) {
+    let preferences = preferencesRef.current;
+    if (preferences && provider && model) {
+      preferences = rememberComposerSession(preferences, {
+        provider,
+        model,
+        reasoning_effort: reasoningEffort,
+        service_tier: serviceTier,
+        context_window: contextWindow,
+      });
+      preferencesRef.current = preferences;
+    }
+    const remembered = preferences && selection.model
+      ? rememberedModelTraits(preferences, selection.provider, selection.model)
+      : undefined;
+    setProvider(selection.provider);
+    setModel(selection.model);
+    setReasoningEffort(remembered ? remembered.reasoningEffort : selection.reasoningEffort);
+    setServiceTier(remembered ? remembered.serviceTier : selection.serviceTier);
+    setContextWindow(remembered ? remembered.contextWindow : selection.contextWindow);
+  }
+
+  function applyModelTraits(changes: Partial<ModelTraitSelection>) {
+    if (changes.reasoningEffort !== undefined) setReasoningEffort(changes.reasoningEffort);
+    if (changes.serviceTier !== undefined) setServiceTier(changes.serviceTier);
+    if (changes.contextWindow !== undefined) setContextWindow(changes.contextWindow);
+  }
+
   async function start() {
     const value = prompt.trim();
     if (!selectedProject || !provider || !value || submitting) return;
@@ -200,12 +289,20 @@ export default function NewTaskScreen() {
         provider,
         isolated && !projectless,
         value,
-        { model, reasoningEffort, runtimeMode, baseBranch },
+        {
+          model,
+          reasoningEffort,
+          serviceTier,
+          contextWindow,
+          runtimeMode,
+          baseBranch,
+        },
       );
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       const address = daemon.activeProfile?.address;
       if (address) {
-        void loadComposerPreferences(address).then((prefs) => {
+        void loadComposerPreferences(address).then((stored) => {
+          const prefs = preferencesRef.current ?? stored;
           let next = rememberComposerSession(prefs, session);
           if (!session.model) {
             next = {
@@ -213,8 +310,11 @@ export default function NewTaskScreen() {
               lastProvider: session.provider,
               lastModel: null,
               lastReasoningEffort: session.reasoning_effort ?? null,
+              lastServiceTier: session.service_tier ?? null,
+              lastContextWindow: session.context_window ?? null,
             };
           }
+          preferencesRef.current = next;
           return saveComposerPreferences(address, next);
         }).catch(() => {});
         void saveNewTaskExtras(address, {
@@ -243,7 +343,7 @@ export default function NewTaskScreen() {
   const providerModels = modelCatalog.find((entry) => entry.id === provider)?.models ?? [];
   const activeModel = model
     ? providerModels.find((item) => item.id === model)
-    : providerModels.find((item) => item.is_default);
+    : providerModels.find((item) => item.is_default) ?? providerModels[0];
   const modelLabel = !provider
     ? catalog.isPending ? 'Checking agents…' : 'No agents installed'
     : activeModel?.name ?? model ?? providerLabel(provider);
@@ -330,12 +430,21 @@ export default function NewTaskScreen() {
           )}
           placeholder={`Work on ${daemon.activeProfile?.name ?? 'your daemon'}`}
           right={(
-            <SendButton
-              busy={submitting}
-              disabled={startDisabled}
-              label="Start task"
-              onPress={() => void start()}
-            />
+            <>
+              {activeModel && modelHasConfigurableTraits(activeModel) && (
+                <ComposerIconButton
+                  icon={{ ios: 'speedometer', android: 'speed', web: 'speed' }}
+                  label="Model options"
+                  onPress={() => setOpenSheet('traits')}
+                />
+              )}
+              <SendButton
+                busy={submitting}
+                disabled={startDisabled}
+                label="Start task"
+                onPress={() => void start()}
+              />
+            </>
           )}
           value={prompt}
           onChangeText={setPrompt}
@@ -397,16 +506,22 @@ export default function NewTaskScreen() {
 
       <ModelPickerSheet
         model={model}
-        onApply={(selection) => {
-          setProvider(selection.provider);
-          setModel(selection.model);
-          setReasoningEffort(selection.reasoningEffort);
-        }}
+        onApply={applyModelSelection}
         onDismiss={() => setOpenSheet(null)}
         provider={provider}
         providers={installedProviders}
         visible={openSheet === 'model'}
       />
+
+      {activeModel && (
+        <ModelTraitsSheet
+          model={activeModel}
+          onApply={applyModelTraits}
+          onDismiss={() => setOpenSheet(null)}
+          selection={{ reasoningEffort, serviceTier, contextWindow }}
+          visible={openSheet === 'traits'}
+        />
+      )}
 
       <Sheet onDismiss={() => setOpenSheet(null)} title="Workspace" visible={openSheet === 'workspace'}>
         <SheetRow

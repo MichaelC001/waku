@@ -83,18 +83,22 @@ describe('mobile runtime projection', () => {
     });
   });
 
-  test('creates a draft carrying the chosen model and access mode', () => {
+  test('creates a draft carrying the chosen model traits and access mode', () => {
     const created = createSession('project', 'codex', false, {
       nowSeconds: () => 50,
       randomUUID: () => 'new-session',
     }, {
       model: 'gpt-5-codex',
       reasoningEffort: 'high',
+      serviceTier: 'fast',
+      contextWindow: '1m',
       runtimeMode: 'ask',
     });
     expect(created).toMatchObject({
       model: 'gpt-5-codex',
       reasoning_effort: 'high',
+      service_tier: 'fast',
+      context_window: '1m',
       runtime_mode: 'ask',
     });
   });
@@ -119,21 +123,35 @@ describe('mobile runtime projection', () => {
   });
 
   test('applies option changes without clobbering unrelated fields', () => {
-    const current = session({ model: 'old', reasoning_effort: 'low' });
+    const current = session({
+      model: 'old',
+      reasoning_effort: 'low',
+      service_tier: 'default',
+      context_window: '200k',
+    });
     const next = applySessionOptions(current, { model: 'new-model' }, {
       nowSeconds: () => 77,
       randomUUID: () => 'unused',
     });
     expect(next.model).toBe('new-model');
     expect(next.reasoning_effort).toBe('low');
+    expect(next.service_tier).toBe('default');
+    expect(next.context_window).toBe('200k');
     expect(next.runtime_mode).toBe(current.runtime_mode);
     expect(next.updated_at).toBe(77);
-    const cleared = applySessionOptions(current, { model: null, reasoningEffort: null }, {
+    const cleared = applySessionOptions(current, {
+      model: null,
+      reasoningEffort: null,
+      serviceTier: 'fast',
+      contextWindow: '1m',
+    }, {
       nowSeconds: () => 78,
       randomUUID: () => 'unused',
     });
     expect(cleared.model).toBeNull();
     expect(cleared.reasoning_effort).toBeNull();
+    expect(cleared.service_tier).toBe('fast');
+    expect(cleared.context_window).toBe('1m');
   });
 });
 
