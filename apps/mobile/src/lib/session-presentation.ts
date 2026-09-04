@@ -104,6 +104,17 @@ export function sessionHasStarted(session: AgentSession): boolean {
   );
 }
 
+/** List projections only carry the session status, while hydrated sessions
+ * also know whether their latest turn has already settled. Prefer the turn
+ * when it is available so a lagging list status cannot strand a spinner. */
+export function sessionIsRunning(
+  session: Pick<AgentSession, 'status' | 'turns'>,
+): boolean {
+  if (session.status !== 'connecting' && session.status !== 'working') return false;
+  const latestTurn = session.turns.at(-1);
+  return !latestTurn || latestTurn.status === 'running';
+}
+
 export function sessionTimestamp(session: AgentSession): number {
   // Match desktop: a submitted/replied turn promotes the task, while metadata
   // edits such as rename leave it in its existing date group.

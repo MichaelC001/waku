@@ -32,10 +32,11 @@ import { ConnectionBanner, useConnectionNotice } from '@/components/connection-b
 import { DaemonPickerSheet } from '@/components/daemon-picker-sheet';
 import { GlassSurface } from '@/components/glass-surface';
 import { ConnectionStatus, connectionPhaseLabel } from '@/components/connection-status';
+import { ProviderIcon } from '@/components/provider-icon';
 import { RenameDialog } from '@/components/rename-dialog';
 import { TaskRowMenu } from '@/components/task-row-menu';
 import { NativeTint, Radius, Spacing } from '@/constants/theme';
-import { useTaskState } from '@/hooks/use-daemon-data';
+import { useSession, useTaskState } from '@/hooks/use-daemon-data';
 import { useTheme } from '@/hooks/use-theme';
 import { useDaemon } from '@/lib/daemon-context';
 import { useRuntime } from '@/lib/runtime-context';
@@ -43,6 +44,7 @@ import {
   displaySessionTitle,
   groupSessions,
   providerLabel,
+  sessionIsRunning,
   type SessionListItem,
 } from '@/lib/session-presentation';
 
@@ -130,16 +132,22 @@ function TaskDrawerContent({
   const daemon = useDaemon();
   const runtime = useRuntime();
   const taskState = useTaskState();
+  const selectedSession = useSession(selectedSessionId ?? undefined).data;
   const [search, setSearch] = useState('');
   const [refreshing, setRefreshing] = useState(false);
   const [daemonPickerOpen, setDaemonPickerOpen] = useState(false);
   const [renameTarget, setRenameTarget] = useState<AgentSession | null>(null);
   const visibleSessions = useMemo(() => {
     if (!taskState.data) return [];
+    const sessions = selectedSession
+      ? taskState.data.sessions.map((session) => (
+          session.id === selectedSession.id ? selectedSession : session
+        ))
+      : taskState.data.sessions;
     const query = search.trim().toLocaleLowerCase();
-    if (!query) return taskState.data.sessions;
+    if (!query) return sessions;
     const projects = new Map(taskState.data.projects.map((project) => [project.id, project]));
-    return taskState.data.sessions.filter((session) => {
+    return sessions.filter((session) => {
       const project = projects.get(session.project_id);
       return [
         displaySessionTitle(session),
@@ -149,7 +157,7 @@ function TaskDrawerContent({
         session.model,
       ].some((value) => value?.toLocaleLowerCase().includes(query));
     });
-  }, [search, taskState.data]);
+  }, [search, selectedSession, taskState.data]);
   const sections = useMemo(
     () => taskState.data ? groupSessions(taskState.data.projects, visibleSessions) : [],
     [taskState.data, visibleSessions],
@@ -455,9 +463,10 @@ function SessionRow({
   const theme = useTheme();
   const rowWidth = Math.max(0, drawerWidth - 24);
   const session = item.session;
+  const running = sessionIsRunning(session);
   return (
     <TaskRowMenu
-      accessibilityLabel={`${displaySessionTitle(session)}, ${item.projectName}`}
+      accessibilityLabel={`${displaySessionTitle(session)}, ${providerLabel(session.provider)} in ${item.projectName}${running ? ', Running' : ''}`}
       onDelete={onDelete}
       onRename={onRename}
       onSelect={onSelect}
@@ -472,9 +481,27 @@ function SessionRow({
               width: rowWidth,
             },
           ]}>
-          <Text numberOfLines={1} style={[styles.sessionTitle, { color: theme.text }]}>
-            {displaySessionTitle(session)}
-          </Text>
+          <View style={styles.sessionHeading}>
+            <Text numberOfLines={1} style={[styles.sessionTitle, { color: theme.text }]}>
+              {displaySessionTitle(session)}
+            </Text>
+            {running && (
+              <ActivityIndicator
+                accessibilityLabel="Running"
+                color={theme.textTertiary}
+                size="small"
+                style={styles.sessionSpinner}
+              />
+            )}
+          </View>
+          <View style={styles.sessionMetadata}>
+            <ProviderIcon color={theme.textTertiary} provider={session.provider} size={12} />
+            <Text
+              numberOfLines={1}
+              style={[styles.sessionProject, { color: theme.textTertiary }]}>
+              {item.projectName}
+            </Text>
+          </View>
         </View>
       )}
       selected={selected}
@@ -557,12 +584,23 @@ const styles = StyleSheet.create({
     paddingHorizontal: 18,
   },
   emptyActionText: { fontSize: 14, fontWeight: '700' },
-  sessionMenu: { height: 52, marginHorizontal: 12 },
+  sessionMenu: { height: 62, marginHorizontal: 12 },
   sessionRow: {
     borderRadius: 10,
-    height: 52,
+    gap: 3,
+    height: 62,
     justifyContent: 'center',
     paddingHorizontal: 12,
   },
-  sessionTitle: { fontSize: 16.5, fontWeight: '400', letterSpacing: -0.2, lineHeight: 22 },
+  sessionHeading: { alignItems: 'center', flexDirection: 'row', gap: 8 },
+  sessionMetadata: { alignItems: 'center', flexDirection: 'row', gap: 5 },
+  sessionProject: { flex: 1, fontSize: 12.5, lineHeight: 17 },
+  sessionSpinner: { height: 14, transform: [{ scale: 0.72 }], width: 14 },
+  sessionTitle: {
+    flex: 1,
+    fontSize: 16.5,
+    fontWeight: '400',
+    letterSpacing: -0.2,
+    lineHeight: 22,
+  },
 });
