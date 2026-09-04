@@ -1,5 +1,6 @@
 import type {
   AgentSession,
+  MessageAttachment,
   Project,
   ProviderKind,
   RuntimeMode,
@@ -25,15 +26,20 @@ export function beginTurn(
   session: AgentSession,
   prompt: string,
   clock: MobileRuntimeClock,
+  attachments: MessageAttachment[] = [],
+  providerPromptOverride?: string,
 ): AgentSession {
   const now = clock.nowSeconds();
   const turnId = clock.randomUUID();
   const visiblePrompt = prompt.trim();
+  const providerPrompt = providerPromptOverride === undefined
+    ? providerPromptForSubmission(visiblePrompt, attachments)
+    : providerPromptOverride.trim();
   return {
     ...session,
     auto_title:
       session.messages.length === 0 && session.title === 'New task' && !session.auto_title
-        ? promptTitle(visiblePrompt)
+        ? promptTitle(visiblePrompt || attachments[0]?.name || '')
         : session.auto_title,
     status: 'connecting',
     updated_at: now,
@@ -44,7 +50,10 @@ export function beginTurn(
         id: clock.randomUUID(),
         turn_id: turnId,
         role: 'user',
-        content: visiblePrompt,
+        content: providerPrompt,
+        display_content:
+          attachments.length || providerPrompt !== visiblePrompt ? visiblePrompt : null,
+        attachments,
         created_at: now,
         streaming: false,
       },
@@ -109,8 +118,14 @@ export function queueSubmission(
   session: AgentSession,
   prompt: string,
   clock: MobileRuntimeClock,
+  attachments: MessageAttachment[] = [],
+  providerPromptOverride?: string,
 ): AgentSession {
   const now = clock.nowSeconds();
+  const visiblePrompt = prompt.trim();
+  const providerPrompt = providerPromptOverride === undefined
+    ? providerPromptForSubmission(visiblePrompt, attachments)
+    : providerPromptOverride.trim();
   return {
     ...session,
     updated_at: now,
@@ -118,13 +133,24 @@ export function queueSubmission(
       ...(session.queued_messages ?? []),
       {
         id: clock.randomUUID(),
-        content: prompt,
-        display_content: null,
-        attachments: [],
+        content: providerPrompt,
+        display_content:
+          attachments.length || providerPrompt !== visiblePrompt ? visiblePrompt : null,
+        attachments,
         created_at: now,
       },
     ],
   };
+}
+
+export function providerPromptForSubmission(
+  prompt: string,
+  attachments: MessageAttachment[],
+): string {
+  return [
+    prompt.trim(),
+    attachments.map((attachment) => `@${attachment.mention}`).join(' '),
+  ].filter(Boolean).join(' ');
 }
 
 /** The ids beginTurn gave the running turn and the user message that opened

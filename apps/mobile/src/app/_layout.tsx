@@ -8,16 +8,22 @@ import {
 import * as SplashScreen from "expo-splash-screen";
 import { StatusBar } from "expo-status-bar";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { StyleSheet, useColorScheme } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 
 import { Colors } from "@/constants/theme";
+import {
+  HeaderAction,
+  HeaderActionGroup,
+  nativeHeaderButtons,
+  type HeaderActionSpec,
+} from "@/components/screen-header";
+import { TaskDrawerHost, useTaskDrawer } from "@/components/task-drawer";
 import { DaemonProvider, useDaemon } from "@/lib/daemon-context";
 import { RuntimeProvider } from "@/lib/runtime-context";
 
-/** Deep links and state restores land with the task list beneath them, so a
- * cold-opened task still gets the navigation bar's native back button. */
+/** Deep links and state restores keep the new-task home as the stack anchor. */
 export const unstable_settings = { anchor: "index" };
 
 void SplashScreen.preventAutoHideAsync();
@@ -73,7 +79,9 @@ export default function RootLayout() {
         <DaemonProvider>
           <RuntimeProvider>
             <ThemeProvider value={navigationTheme}>
-              <AppNavigator />
+              <TaskDrawerHost>
+                <AppNavigator />
+              </TaskDrawerHost>
               <StatusBar style="auto" />
             </ThemeProvider>
           </RuntimeProvider>
@@ -84,9 +92,26 @@ export default function RootLayout() {
 }
 
 function AppNavigator() {
-  const { phase } = useDaemon();
+  const { phase, profiles } = useDaemon();
+  const { openTaskDrawer } = useTaskDrawer();
   const colorScheme = useColorScheme();
   const theme = Colors[colorScheme === "dark" ? "dark" : "light"];
+  const daemonRoutesAvailable = phase === "booting" || profiles.length > 0;
+  const drawerAction = useMemo<HeaderActionSpec>(() => ({
+    icon: { ios: "sidebar.left", android: "menu", web: "menu" },
+    label: "Task history",
+    onPress: openTaskDrawer,
+  }), [openTaskDrawer]);
+  const drawerHeader = useMemo<NativeStackNavigationOptions>(() => ({
+    ...floatingHeader,
+    gestureEnabled: false,
+    headerLeft: () => (
+      <HeaderActionGroup>
+        <HeaderAction {...drawerAction} />
+      </HeaderActionGroup>
+    ),
+    unstable_headerLeftItems: () => nativeHeaderButtons([drawerAction]),
+  }), [drawerAction]);
 
   useEffect(() => {
     if (phase !== "booting") void SplashScreen.hideAsync();
@@ -104,26 +129,37 @@ function AppNavigator() {
     >
       <Stack.Screen
         name="index"
-        options={{ ...floatingHeader, headerTitle: "", title: "Waku" }}
+        options={daemonRoutesAvailable
+          ? { ...drawerHeader, title: "New Task" }
+          : { headerShown: false, title: "Waku" }}
       />
-      <Stack.Screen
-        name="daemons"
-        options={{ headerLargeTitle: true, title: "Daemons" }}
-      />
-      <Stack.Screen
-        name="new-task"
-        options={{ ...floatingHeader, title: "New Task" }}
-      />
+      {/* Removing the final saved daemon also removes every daemon-backed
+       * route from navigation, returning restored and open tasks to home. */}
+      <Stack.Protected guard={daemonRoutesAvailable}>
+        <Stack.Screen
+          name="daemons"
+          options={{ headerLargeTitle: true, title: "Daemons" }}
+        />
+        <Stack.Screen
+          name="new-task"
+          options={{ ...drawerHeader, title: "New Task" }}
+        />
+        <Stack.Screen
+          name="session/[id]"
+          options={{
+            ...drawerHeader,
+            animation: "none",
+            headerTitleAlign: "left",
+            title: "Task",
+          }}
+        />
+      </Stack.Protected>
       <Stack.Screen
         name="daemon-editor"
         options={{
           presentation: "pageSheet",
           title: "Add Daemon",
         }}
-      />
-      <Stack.Screen
-        name="session/[id]"
-        options={{ ...floatingHeader, headerTitleAlign: "center", title: "Task" }}
       />
     </Stack>
   );

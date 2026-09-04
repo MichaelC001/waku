@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import type { AgentSession, Project, SequencedEvent } from '@waku/client';
+import type { AgentSession, MessageAttachment, Project, SequencedEvent } from '@waku/client';
 
 import {
   applySessionOptions,
@@ -28,6 +28,33 @@ describe('mobile runtime projection', () => {
       created_at: 42,
     });
     expect(started.turns.at(-1)).toMatchObject({ id: 'id-1', status: 'running' });
+  });
+
+  test('keeps attachment presentation separate from the provider prompt', () => {
+    let id = 0;
+    const started = beginTurn(session(), 'Review this', {
+      nowSeconds: () => 42,
+      randomUUID: () => `id-${++id}`,
+    }, [attachment]);
+    expect(started.messages.at(-1)).toMatchObject({
+      content: 'Review this @/daemon/file.png',
+      display_content: 'Review this',
+      attachments: [attachment],
+    });
+  });
+
+  test('allows an attachment-only turn and uses its name for the title', () => {
+    let id = 0;
+    const started = beginTurn(session(), '', {
+      nowSeconds: () => 42,
+      randomUUID: () => `id-${++id}`,
+    }, [attachment]);
+    expect(started.auto_title).toBe('file.png');
+    expect(started.messages.at(-1)).toMatchObject({
+      content: '@/daemon/file.png',
+      display_content: '',
+      attachments: [attachment],
+    });
   });
 
   test('uses a worktree path and rejects replayed runtime events', () => {
@@ -122,6 +149,20 @@ describe('mobile runtime projection', () => {
     expect(busy.queued_messages ?? []).toEqual([]);
   });
 
+  test('retains attachments in a queued submission', () => {
+    const queued = queueSubmission(session({ status: 'working' }), '', {
+      nowSeconds: () => 99,
+      randomUUID: () => 'queued',
+    }, [attachment]);
+    expect(queued.queued_messages).toEqual([{
+      id: 'queued',
+      content: '@/daemon/file.png',
+      display_content: '',
+      attachments: [attachment],
+      created_at: 99,
+    }]);
+  });
+
   test('applies option changes without clobbering unrelated fields', () => {
     const current = session({
       model: 'old',
@@ -175,3 +216,12 @@ function session(overrides: Partial<AgentSession> = {}): AgentSession {
     ...overrides,
   };
 }
+
+const attachment: MessageAttachment = {
+  path: '/daemon/file.png',
+  mention: '/daemon/file.png',
+  name: 'file.png',
+  is_dir: false,
+  is_image: true,
+  blob_reference: 'waku-attachment:file',
+};

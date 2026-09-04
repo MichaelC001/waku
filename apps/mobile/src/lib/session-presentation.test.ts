@@ -23,25 +23,33 @@ describe('mobile session presentation', () => {
     );
   });
 
-  test('groups started sessions by local day and newest first', () => {
+  test('groups started sessions by the desktop calendar periods, newest first', () => {
     const now = new Date(2026, 7, 31, 12);
     const projects: Project[] = [{ id: 'project', name: 'Waku', path: '/waku', created_at: 1 }];
     const current = session({ id: 'new', last_reply_at: epoch(2026, 7, 31, 11) });
     const yesterday = session({ id: 'old', last_reply_at: epoch(2026, 7, 30, 20) });
+    const earlier = session({ id: 'earlier', last_reply_at: epoch(2026, 7, 20, 20) });
     const empty = session({ id: 'empty', last_reply_at: null, messages: [], turns: [] });
-    expect(groupSessions(projects, [yesterday, empty, current], now).map((group) => ({
+    expect(groupSessions(projects, [earlier, yesterday, empty, current], now).map((group) => ({
       id: group.id,
       sessions: group.data.map((item) => item.session.id),
     }))).toEqual([
       { id: 'today', sessions: ['new'] },
       { id: 'yesterday', sessions: ['old'] },
+      { id: 'month', sessions: ['earlier'] },
     ]);
   });
 
   test('formats compact recency labels', () => {
     expect(relativeSessionTime(1_000, 1_030_000)).toBe('Now');
     expect(relativeSessionTime(1_000, 1_300_000)).toBe('5m');
-    expect(sessionDateGroup(epoch(2026, 7, 24, 12), new Date(2026, 7, 31, 12))).toBe('week');
+    const now = new Date(2026, 7, 12, 12);
+    expect(sessionDateGroup(epoch(2026, 7, 12, 12), now)).toBe('today');
+    expect(sessionDateGroup(epoch(2026, 7, 11, 12), now)).toBe('yesterday');
+    expect(sessionDateGroup(epoch(2026, 7, 10, 12), now)).toBe('week');
+    expect(sessionDateGroup(epoch(2026, 7, 1, 12), now)).toBe('month');
+    expect(sessionDateGroup(epoch(2026, 0, 1, 12), now)).toBe('year');
+    expect(sessionDateGroup(epoch(2025, 11, 31, 12), now)).toBe('more');
   });
 
   test('reports context usage as a bounded percentage', () => {

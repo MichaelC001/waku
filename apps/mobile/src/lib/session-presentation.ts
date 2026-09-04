@@ -13,7 +13,7 @@ import { turnAnswerStart, turnFoldLabel } from '@waku/client/transcript-presenta
 import type { MarkdownBlock } from '../md/parse';
 import { TranscriptMarkdownCache } from '../md/transcript-cache';
 
-export type SessionGroupId = 'today' | 'yesterday' | 'week' | 'older';
+export type SessionGroupId = 'today' | 'yesterday' | 'week' | 'month' | 'year' | 'more';
 
 export interface SessionListItem {
   session: AgentSession;
@@ -87,8 +87,10 @@ const GAP_BLOCK = 12;
 const GROUPS: Array<{ id: SessionGroupId; title: string }> = [
   { id: 'today', title: 'Today' },
   { id: 'yesterday', title: 'Yesterday' },
-  { id: 'week', title: 'Previous 7 Days' },
-  { id: 'older', title: 'Earlier' },
+  { id: 'week', title: 'This Week' },
+  { id: 'month', title: 'This Month' },
+  { id: 'year', title: 'This Year' },
+  { id: 'more', title: 'More' },
 ];
 
 export function displaySessionTitle(session: AgentSession): string {
@@ -103,7 +105,9 @@ export function sessionHasStarted(session: AgentSession): boolean {
 }
 
 export function sessionTimestamp(session: AgentSession): number {
-  return session.last_reply_at ?? session.updated_at ?? session.created_at;
+  // Match desktop: a submitted/replied turn promotes the task, while metadata
+  // edits such as rename leave it in its existing date group.
+  return session.last_reply_at ?? session.created_at;
 }
 
 export function groupSessions(
@@ -135,11 +139,19 @@ export function sessionDateGroup(timestamp: number, now = new Date()): SessionGr
   const start = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
   const day = new Date(timestamp * 1_000);
   const dayStart = new Date(day.getFullYear(), day.getMonth(), day.getDate()).getTime();
-  const elapsedDays = Math.floor((start - dayStart) / 86_400_000);
-  if (elapsedDays <= 0) return 'today';
-  if (elapsedDays === 1) return 'yesterday';
-  if (elapsedDays <= 7) return 'week';
-  return 'older';
+  if (dayStart >= start) return 'today';
+
+  const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1).getTime();
+  if (dayStart === yesterday) return 'yesterday';
+
+  const weekStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  weekStart.setDate(weekStart.getDate() - ((weekStart.getDay() + 6) % 7));
+  if (dayStart >= weekStart.getTime()) return 'week';
+  if (day.getFullYear() === now.getFullYear() && day.getMonth() === now.getMonth()) {
+    return 'month';
+  }
+  if (day.getFullYear() === now.getFullYear()) return 'year';
+  return 'more';
 }
 
 export function relativeSessionTime(timestamp: number, now = Date.now()): string {

@@ -158,7 +158,9 @@ function UserBubbleInner({ message }: { message: Message }) {
         delayLongPress={350}
         onLongPress={() => void copy()}
         style={[styles.userBubble, { backgroundColor: theme.raised }]}>
-        <Text selectable style={[styles.userText, { color: theme.text }]}>{content}</Text>
+        {content ? (
+          <Text selectable style={[styles.userText, { color: theme.text }]}>{content}</Text>
+        ) : null}
         {message.attachments?.length ? (
           <View style={styles.attachments}>
             {message.attachments.map((attachment) => (

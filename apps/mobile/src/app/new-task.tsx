@@ -20,6 +20,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AppSymbol } from '@/components/app-symbol';
+import { DaemonPickerSheet } from '@/components/daemon-picker-sheet';
 import {
   ComposerCard,
   ComposerIconButton,
@@ -33,7 +34,6 @@ import {
   ModelTraitsSheet,
   type ProviderModelSelection,
 } from '@/components/session-option-sheets';
-import { SessionView } from '@/components/session-view';
 import { Sheet, SheetRow } from '@/components/sheet';
 import { Radius, Spacing } from '@/constants/theme';
 import { useAllProviderModels, useProviderCatalog, useTaskState } from '@/hooks/use-daemon-data';
@@ -86,7 +86,6 @@ export default function NewTaskScreen() {
   const [baseBranch, setBaseBranch] = useState<string | null>(null);
   const [prompt, setPrompt] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const [createdSessionId, setCreatedSessionId] = useState<string | null>(null);
   const [openSheet, setOpenSheet] = useState<SheetKind | null>(null);
   const [projectPickerOpen, setProjectPickerOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -330,9 +329,9 @@ export default function NewTaskScreen() {
           draft: null,
         }]).catch(() => {});
       }
-      // The page becomes the session in place — no navigation, matching the
-      // desktop where the composer stays put and the transcript starts above.
-      setCreatedSessionId(session.id);
+      setPrompt('');
+      setSubmitting(false);
+      router.push({ pathname: '/session/[id]', params: { id: session.id } });
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
@@ -352,8 +351,6 @@ export default function NewTaskScreen() {
     ?? branches.data?.current
     ?? 'Default branch';
   const startDisabled = !selectedProject || !provider || !prompt.trim() || submitting;
-
-  if (createdSessionId) return <SessionView sessionId={createdSessionId} />;
 
   return (
     <KeyboardAvoidingView
@@ -451,31 +448,10 @@ export default function NewTaskScreen() {
         />
       </View>
 
-      <Sheet onDismiss={() => setOpenSheet(null)} title="Daemon" visible={openSheet === 'daemon'}>
-        {daemon.profiles.map((profile) => (
-          <SheetRow
-            description={profile.address}
-            key={profile.id}
-            label={profile.name}
-            onPress={pick(() => void daemon.selectProfile(profile.id))}
-            selected={profile.id === daemon.activeProfile?.id}
-          />
-        ))}
-        <SheetRow
-          label="Manage daemons…"
-          leading={(
-            <AppSymbol
-              name={{ ios: 'gearshape', android: 'settings', web: 'settings' }}
-              size={16}
-              tintColor={theme.textSecondary}
-            />
-          )}
-          onPress={() => {
-            setOpenSheet(null);
-            router.push('/daemons');
-          }}
-        />
-      </Sheet>
+      <DaemonPickerSheet
+        onDismiss={() => setOpenSheet(null)}
+        visible={openSheet === 'daemon'}
+      />
 
       <Sheet onDismiss={() => setOpenSheet(null)} title="Project" visible={openSheet === 'project'}>
         {projects.map((project) => (

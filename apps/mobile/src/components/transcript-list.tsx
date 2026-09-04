@@ -20,6 +20,7 @@ import {
   type NativeScrollEvent,
   type NativeSyntheticEvent,
 } from 'react-native';
+import { ScrollViewMarker } from 'react-native-screens/experimental';
 
 import { AppSymbol } from '@/components/app-symbol';
 import { GlassSurface } from '@/components/glass-surface';
@@ -446,50 +447,54 @@ export function TranscriptList({
 
   return (
     <View style={styles.frame}>
-      <ScrollView
-        ref={scrollRef}
-        contentContainerStyle={styles.content}
-        contentInsetAdjustmentBehavior="never"
-        keyboardDismissMode="interactive"
-        keyboardShouldPersistTaps="handled"
-        maintainVisibleContentPosition={maintainPosition}
-        scrollEventThrottle={16}
-        showsVerticalScrollIndicator={false}
-        style={[styles.list, styles.inverted]}
-        onContentSizeChange={onContentSizeChange}
-        onLayout={onLayout}
-        onMomentumScrollBegin={onMomentumScrollBegin}
-        onMomentumScrollEnd={onMomentumScrollEnd}
-        onScroll={onScroll}
-        onScrollBeginDrag={onScrollBeginDrag}
-        onScrollEndDrag={onScrollEndDrag}
-        onTouchCancel={onTouchEnd}
-        onTouchEnd={onTouchEnd}
-        onTouchStart={onTouchStart}>
-        {/* Child 0, always mounted: the native anchor while pinned. */}
-        <View style={[styles.inverted, styles.column]}>
-          {running ? <WorkingStrip session={session} /> : null}
-        </View>
-        {rows.map((_, reversed) => {
-          const row = rows[rows.length - 1 - reversed]!;
-          return (
-            <TranscriptRowFrame
-              key={row.key}
-              keepRowTop={keepRowTop}
-              markdownStyles={markdownStyles}
-              md={md}
-              row={row}
-              seeded={row.kind === 'md' && seeded.ids.has(row.messageId)}
-              veils={veils}
-              onToggleFold={toggleFold}
-            />
-          );
-        })}
-        {/* Last child: the visual top, under the floating header. */}
-        <View style={[styles.inverted, styles.column, { paddingTop: headerInset + 2 }]}>
-          {hasEarlier && <EarlierIndicator />}
-        </View>
-      </ScrollView>
+      <ScrollViewMarker
+        scrollEdgeEffects={{ bottom: 'hidden', left: 'hidden', right: 'hidden', top: 'hidden' }}
+        style={styles.list}>
+        <ScrollView
+          ref={scrollRef}
+          contentContainerStyle={styles.content}
+          contentInsetAdjustmentBehavior="never"
+          keyboardDismissMode="interactive"
+          keyboardShouldPersistTaps="handled"
+          maintainVisibleContentPosition={maintainPosition}
+          scrollEventThrottle={16}
+          showsVerticalScrollIndicator={false}
+          style={[styles.list, styles.inverted]}
+          onContentSizeChange={onContentSizeChange}
+          onLayout={onLayout}
+          onMomentumScrollBegin={onMomentumScrollBegin}
+          onMomentumScrollEnd={onMomentumScrollEnd}
+          onScroll={onScroll}
+          onScrollBeginDrag={onScrollBeginDrag}
+          onScrollEndDrag={onScrollEndDrag}
+          onTouchCancel={onTouchEnd}
+          onTouchEnd={onTouchEnd}
+          onTouchStart={onTouchStart}>
+          {/* Child 0, always mounted: the native anchor while pinned. */}
+          <View style={[styles.inverted, styles.column]}>
+            {running ? <WorkingStrip session={session} /> : null}
+          </View>
+          {rows.map((_, reversed) => {
+            const row = rows[rows.length - 1 - reversed]!;
+            return (
+              <TranscriptRowFrame
+                key={row.key}
+                keepRowTop={keepRowTop}
+                markdownStyles={markdownStyles}
+                md={md}
+                row={row}
+                seeded={row.kind === 'md' && seeded.ids.has(row.messageId)}
+                veils={veils}
+                onToggleFold={toggleFold}
+              />
+            );
+          })}
+          {/* Last child: the visual top, under the floating header. */}
+          <View style={[styles.inverted, styles.column, { paddingTop: headerInset + 2 }]}>
+            {hasEarlier && <EarlierIndicator />}
+          </View>
+        </ScrollView>
+      </ScrollViewMarker>
       {showEmpty && (
         <View pointerEvents="none" style={styles.emptyOverlay}>
           <SessionEmpty error={null} loading={false} missing={false} />

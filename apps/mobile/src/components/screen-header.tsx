@@ -53,7 +53,7 @@ export function ScreenHeaderBackdrop({ visible }: { visible: boolean }) {
         {
           height,
           borderBottomColor: theme.borderStrong,
-          backgroundColor: colorScheme === "dark" ? "#333333e3" : "#ffffffd6",
+          backgroundColor: colorScheme === "dark" ? "#33333375" : "#ffffffd6",
         },
       ]}
     >
@@ -62,16 +62,14 @@ export function ScreenHeaderBackdrop({ visible }: { visible: boolean }) {
   );
 }
 
-/** Width kept clear on each side of the title for the bar's own items: the
- * round back button on the left, a two-action glass capsule on the right.
- * The title view is laid out by Yoga from its content, so it has to bound
- * itself; UIKit only centers it. */
-const TitleSideReserve = 120;
+/** Space occupied by the leading button, trailing actions, native margins,
+ * and the gaps around a task title placed with the leading bar items. */
+const TitleChromeWidth = 208;
+const TitleMinWidth = 56;
+const TitleMaxWidth = 360;
 
-/**
- * Navigation bar title with an optional "project · daemon" subtitle. Rendered
- * as the bar's native title view, so UIKit owns it during transitions.
- */
+/** Two-line task label for the native navigation bar. iOS mounts it beside
+ * the leading button; other platforms use it as their left-aligned title. */
 export function HeaderTitle({
   title,
   subtitle,
@@ -81,7 +79,10 @@ export function HeaderTitle({
 }) {
   const theme = useTheme();
   const { width } = useWindowDimensions();
-  const maxWidth = Math.max(TitleSideReserve, width - TitleSideReserve * 2);
+  const maxWidth = Math.min(
+    TitleMaxWidth,
+    Math.max(TitleMinWidth, width - TitleChromeWidth),
+  );
   return (
     <View style={[styles.titles, { maxWidth }]}>
       <Text numberOfLines={1} style={[styles.title, { color: theme.text }]}>
@@ -148,6 +149,26 @@ export function HeaderAction({ icon, label, onPress }: HeaderActionSpec) {
   );
 }
 
+/** Non-pressable trigger content for a platform-native menu. MenuView owns
+ * the gesture recognizer; keeping this as a View avoids nested pressables on
+ * Android while preserving one labelled accessibility target. */
+export function HeaderMenuTrigger({
+  icon,
+  label,
+}: Pick<HeaderActionSpec, "icon" | "label">) {
+  const theme = useTheme();
+  return (
+    <View
+      accessible
+      accessibilityLabel={label}
+      accessibilityRole="button"
+      style={styles.action}
+    >
+      <AppSymbol name={icon} size={17} tintColor={theme.text} />
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   backdrop: {
     borderBottomWidth: StyleSheet.hairlineWidth,
@@ -159,17 +180,22 @@ const styles = StyleSheet.create({
     zIndex: 20,
   },
   titles: {
-    alignItems: "center",
+    alignItems: "flex-start",
     justifyContent: "center",
     minWidth: 0,
+    overflow: "hidden",
   },
   title: {
     fontSize: 17,
     fontWeight: "700",
     letterSpacing: -0.3,
-    textAlign: "center",
+    textAlign: "left",
   },
-  subtitle: { fontSize: 12.5, marginTop: 1, textAlign: "center" },
+  subtitle: {
+    fontSize: 12.5,
+    marginTop: 1,
+    textAlign: "left",
+  },
   actionGroup: {
     alignItems: "center",
     borderRadius: Radius.pill,

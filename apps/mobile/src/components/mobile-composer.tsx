@@ -1,10 +1,13 @@
 import type {
   AgentSession,
+  MessageAttachment,
   PendingPermission,
   PendingUserInput,
   UserInputAnswer,
 } from '@waku/client';
+import * as DocumentPicker from 'expo-document-picker';
 import * as Haptics from 'expo-haptics';
+import * as ImagePicker from 'expo-image-picker';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   ActivityIndicator,
@@ -14,18 +17,31 @@ import {
   Text,
   TextInput,
   View,
-  type TextInputProps,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AppSymbol } from './app-symbol';
-import { AccessSheet, ModelSheet } from './session-option-sheets';
+import { ComposerAccessMenu } from './composer-access-menu';
+import {
+  ComposerAttachmentMenu,
+  type ComposerAttachmentSource,
+} from './composer-attachment-menu';
+import { ComposerTextInput } from './composer-text-input';
+import type { ComposerTextInputProps } from './composer-text-input.types';
+import { GlassSurface, liquidGlass } from './glass-surface';
+import { ModelSheet } from './session-option-sheets';
 import { MonoFont, NativeTint, Radius } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
+import {
+  importLocalAttachment,
+  localFileName,
+  type LocalAttachmentFile,
+} from '@/lib/attachments';
 import { applyComposerDraftChanges, loadComposerDrafts } from '@/lib/daemon-api';
 import { useDaemon } from '@/lib/daemon-context';
 import { sessionBusy } from '@/lib/mobile-runtime';
 import { useRuntime } from '@/lib/runtime-context';
+import { isDaemonDisconnectError } from '@/lib/runtime-errors';
 
 /**
  * The composer surface shared by the session screen and the new-task screen:
@@ -33,17 +49,29 @@ import { useRuntime } from '@/lib/runtime-context';
  * option toggles on the left, meters and the send button on the right.
  */
 export function ComposerCard({
+  beforeInput,
   left,
   right,
   ...inputProps
-}: TextInputProps & {
+}: ComposerTextInputProps & {
+  beforeInput?: ReactNode;
   left?: ReactNode;
   right?: ReactNode;
 }) {
   const theme = useTheme();
   return (
-    <View style={[styles.card, { backgroundColor: theme.composer, borderColor: theme.border }]}>
-      <TextInput
+    <GlassSurface
+      fallbackColor={theme.composer}
+      interactive
+      style={[
+        styles.card,
+        !liquidGlass && {
+          borderColor: theme.border,
+          borderWidth: StyleSheet.hairlineWidth,
+        },
+      ]}>
+      {beforeInput}
+      <ComposerTextInput
         multiline
         placeholderTextColor={theme.textTertiary}
         selectionColor={NativeTint}
@@ -55,7 +83,7 @@ export function ComposerCard({
         <View style={styles.toolbarSpacer} />
         <View style={styles.cluster}>{right}</View>
       </View>
-    </View>
+    </GlassSurface>
   );
 }
 
@@ -154,49 +182,180 @@ export function MobileComposer({
   const daemon = useDaemon();
   const runtime = useRuntime();
   const [draft, setDraft] = useState('');
+  const [attachments, setAttachments] = useState<MessageAttachment[]>([]);
+  const [draftHydrated, setDraftHydrated] = useState(false);
+  const [importingAttachments, setImportingAttachments] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
   const [modelSheetOpen, setModelSheetOpen] = useState(false);
-  const [accessSheetOpen, setAccessSheetOpen] = useState(false);
   const busy = sessionBusy(session);
   const liveRuntime = runtime.runtimes[session.id];
   const canSteer = busy && Boolean(liveRuntime?.supportsSteer) && session.status !== 'connecting';
   const permission = runtime.permissions[session.id];
   const userInput = runtime.userInputs[session.id];
   const runtimeError = runtime.errors[session.id];
+  const connected = daemon.phase === 'connected';
+  const visibleLocalError = connected && isDaemonDisconnectError(localError) ? null : localError;
+  const visibleRuntimeError = connected && isDaemonDisconnectError(runtimeError)
+    ? null
+    : runtimeError;
+  const visibleError = visibleLocalError || visibleRuntimeError;
   const queued = session.queued_messages ?? [];
 
   useEffect(() => setLocalError(null), [session.id]);
+  useEffect(() => {
+    if (connected && isDaemonDisconnectError(localError)) setLocalError(null);
+  }, [connected, localError]);
 
   // Cross-device draft, persisted on the daemon like the desktop composer:
   // prefill once per session, save edits debounced, clear on send.
   const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const draftLoadedFor = useRef<string | null>(null);
-  const draftRef = useRef(draft);
-  draftRef.current = draft;
+  const draftDirty = useRef(false);
+  const activeSessionId = useRef(session.id);
+  activeSessionId.current = session.id;
+  const mounted = useRef(true);
+  useEffect(() => () => {
+    mounted.current = false;
+  }, []);
+  const draftRef = useRef({ text: draft, attachments });
+  draftRef.current = { text: draft, attachments };
+  const draftClientRef = useRef(daemon.client);
+  draftClientRef.current = daemon.client;
+  const draftHydratedRef = useRef(draftHydrated);
+  draftHydratedRef.current = draftHydrated;
   useEffect(() => {
     const client = daemon.client;
     if (!client || daemon.phase !== 'connected' || draftLoadedFor.current === session.id) return;
     draftLoadedFor.current = session.id;
+    setDraftHydrated(false);
+    let cancelled = false;
     void loadComposerDrafts(client).then((drafts) => {
-      const text = drafts.sessions?.[session.id]?.text;
-      if (text && !draftRef.current.trim()) setDraft(text);
-    }).catch(() => {});
+      if (cancelled) return;
+      const stored = drafts.sessions?.[session.id];
+      if (
+        stored
+        && !draftDirty.current
+        && !draftRef.current.text.trim()
+        && draftRef.current.attachments.length === 0
+      ) {
+        setDraft(stored.text ?? '');
+        setAttachments(stored.attachments ?? []);
+      }
+    }).catch(() => {}).finally(() => {
+      if (!cancelled) setDraftHydrated(true);
+    });
+    return () => {
+      cancelled = true;
+      if (draftLoadedFor.current === session.id) draftLoadedFor.current = null;
+    };
   }, [daemon.client, daemon.phase, session.id]);
   useEffect(() => {
     const client = daemon.client;
-    if (!client || draftLoadedFor.current !== session.id) return;
+    if (!client || !draftHydrated || draftLoadedFor.current !== session.id) return;
     if (draftTimer.current) clearTimeout(draftTimer.current);
     draftTimer.current = setTimeout(() => {
       void applyComposerDraftChanges(client, [{
         target: { type: 'session', sessionId: session.id },
-        draft: draft.trim() ? { text: draft } : null,
+        draft: draft.trim() || attachments.length ? { text: draft, attachments } : null,
       }]).catch(() => {});
     }, 800);
     return () => {
       if (draftTimer.current) clearTimeout(draftTimer.current);
     };
-  }, [daemon.client, draft, session.id]);
+  }, [attachments, daemon.client, draft, draftHydrated, session.id]);
+  useEffect(() => () => {
+    if (draftTimer.current) clearTimeout(draftTimer.current);
+    const client = draftClientRef.current;
+    if (!client || (!draftHydratedRef.current && !draftDirty.current)) return;
+    const snapshot = draftRef.current;
+    void applyComposerDraftChanges(client, [{
+      target: { type: 'session', sessionId: session.id },
+      draft: snapshot.text.trim() || snapshot.attachments.length
+        ? { text: snapshot.text, attachments: snapshot.attachments }
+        : null,
+    }]).catch(() => {});
+  }, [session.id]);
+
+  const attachmentImportTail = useRef<Promise<void>>(Promise.resolve());
+  const pendingAttachmentImports = useRef(0);
+
+  async function addLocalFiles(files: LocalAttachmentFile[]) {
+    if (!files.length) return;
+    const targetSessionId = session.id;
+    pendingAttachmentImports.current += 1;
+    setImportingAttachments(true);
+    setLocalError(null);
+    const operation = attachmentImportTail.current.catch(() => {}).then(async () => {
+      const client = daemon.client;
+      if (!client || daemon.phase !== 'connected') {
+        throw new Error('Waku daemon is disconnected');
+      }
+      for (const file of files) {
+        const imported = await importLocalAttachment(client, file);
+        if (mounted.current && activeSessionId.current === targetSessionId) {
+          draftDirty.current = true;
+          setAttachments((current) => [...current, imported]);
+        }
+      }
+    });
+    attachmentImportTail.current = operation;
+    try {
+      await operation;
+      await Haptics.selectionAsync();
+    } finally {
+      pendingAttachmentImports.current -= 1;
+      if (mounted.current && pendingAttachmentImports.current === 0) {
+        setImportingAttachments(false);
+      }
+    }
+  }
+
+  async function chooseAttachment(source: ComposerAttachmentSource) {
+    try {
+      if (source === 'files') {
+        const result = await DocumentPicker.getDocumentAsync({
+          copyToCacheDirectory: true,
+          multiple: true,
+          type: '*/*',
+        });
+        if (!result.canceled) {
+          await addLocalFiles(result.assets.map((asset) => ({
+            uri: asset.uri,
+            name: asset.name,
+            mimeType: asset.mimeType,
+            size: asset.size,
+            base64: asset.base64,
+          })));
+        }
+        return;
+      }
+
+      if (source === 'camera') {
+        const permission = await ImagePicker.requestCameraPermissionsAsync();
+        if (!permission.granted) {
+          throw new Error('Camera access is required to take a photo');
+        }
+        const result = await ImagePicker.launchCameraAsync({
+          mediaTypes: ['images'],
+          quality: 1,
+        });
+        if (!result.canceled) await addLocalFiles(imagePickerFiles(result.assets, 'Photo'));
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        allowsMultipleSelection: true,
+        mediaTypes: ['images'],
+        quality: 1,
+        selectionLimit: 0,
+      });
+      if (!result.canceled) await addLocalFiles(imagePickerFiles(result.assets, 'Photo'));
+    } catch (cause) {
+      setLocalError(cause instanceof Error ? cause.message : String(cause));
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    }
+  }
 
   const requestSignature = permission?.requestId ?? userInput?.requestId;
   const lastRequest = useRef<string | undefined>(undefined);
@@ -209,14 +368,22 @@ export function MobileComposer({
 
   async function submit() {
     const prompt = draft.trim();
-    if (!prompt || submitting) return;
+    const submittedAttachments = attachments;
+    if (
+      (!prompt && submittedAttachments.length === 0)
+      || submitting
+      || pendingAttachmentImports.current > 0
+    ) return;
     setSubmitting(true);
     setLocalError(null);
     onSubmitted?.();
     try {
-      if (canSteer) await runtime.steerPrompt(session, prompt);
-      else await runtime.sendPrompt(session, prompt);
+      if (canSteer) await runtime.steerPrompt(session, prompt, submittedAttachments);
+      else await runtime.sendPrompt(session, prompt, submittedAttachments);
+      draftDirty.current = false;
+      draftRef.current = { text: '', attachments: [] };
       setDraft('');
+      setAttachments([]);
       if (draftTimer.current) clearTimeout(draftTimer.current);
       if (daemon.client) {
         void applyComposerDraftChanges(daemon.client, [{
@@ -276,12 +443,12 @@ export function MobileComposer({
           onSubmit={(answers) => runtime.respondUserInput(session.id, userInput.requestId, answers)}
         />
       )}
-      {(localError || runtimeError) && (
+      {visibleError && (
         <View
           accessibilityLiveRegion="polite"
           style={[styles.errorBanner, { backgroundColor: theme.dangerSoft }]}>
           <Text style={[styles.errorText, { color: theme.danger }]}>
-            {localError || runtimeError}
+            {visibleError}
           </Text>
           <Pressable
             accessibilityLabel="Dismiss error"
@@ -310,7 +477,9 @@ export function MobileComposer({
             tintColor={theme.textTertiary}
           />
           <Text numberOfLines={1} style={[styles.queuedText, { color: theme.textSecondary }]}>
-            {message.display_content ?? message.content}
+            {message.display_content?.trim()
+              || message.attachments?.map((attachment) => attachment.name).join(', ')
+              || message.content}
           </Text>
           <Pressable
             accessibilityLabel="Remove queued message"
@@ -329,14 +498,65 @@ export function MobileComposer({
 
       <ComposerCard
         accessibilityLabel="Message agent"
+        beforeInput={attachments.length || importingAttachments ? (
+          <ScrollView
+            horizontal
+            keyboardShouldPersistTaps="handled"
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.attachmentStrip}>
+            {attachments.map((attachment, index) => (
+              <Pressable
+                accessibilityLabel={`Remove ${attachment.name}`}
+                accessibilityRole="button"
+                disabled={submitting}
+                key={`${attachment.blob_reference ?? attachment.path}:${index}`}
+                onPress={() => {
+                  draftDirty.current = true;
+                  setAttachments((current) => current.filter((_, item) => item !== index));
+                }}
+                style={({ pressed }) => [
+                  styles.attachmentChip,
+                  { backgroundColor: theme.overlayStrong, opacity: pressed ? 0.6 : 1 },
+                ]}>
+                <AppSymbol
+                  name={{
+                    ios: attachment.is_image ? 'photo' : 'doc',
+                    android: attachment.is_image ? 'image' : 'description',
+                    web: 'description',
+                  }}
+                  size={13}
+                  tintColor={theme.textSecondary}
+                />
+                <Text
+                  numberOfLines={1}
+                  style={[styles.attachmentName, { color: theme.textSecondary }]}>
+                  {attachment.name}
+                </Text>
+                <AppSymbol
+                  name={{ ios: 'xmark', android: 'close', web: 'close' }}
+                  size={9}
+                  tintColor={theme.textTertiary}
+                />
+              </Pressable>
+            ))}
+            {importingAttachments && (
+              <View style={[styles.attachmentChip, { backgroundColor: theme.overlayStrong }]}>
+                <ActivityIndicator color={theme.textSecondary} size="small" />
+                <Text style={[styles.attachmentName, { color: theme.textSecondary }]}>Attaching…</Text>
+              </View>
+            )}
+          </ScrollView>
+        ) : undefined}
         editable={!disconnected && !submitting}
         left={(
           <>
-            <ComposerIconButton
-              active={session.runtime_mode !== 'fullAccess'}
-              icon={{ ios: 'hand.raised', android: 'front_hand', web: 'pan_tool' }}
-              label="Agent access"
-              onPress={() => setAccessSheetOpen(true)}
+            <ComposerAttachmentMenu
+              disabled={disconnected || submitting || importingAttachments}
+              onChoose={(source) => void chooseAttachment(source)}
+            />
+            <ComposerAccessMenu
+              mode={session.runtime_mode}
+              onApply={(mode) => applyOptions({ runtimeMode: mode })}
             />
           </>
         )}
@@ -367,7 +587,12 @@ export function MobileComposer({
             )}
             <SendButton
               busy={submitting}
-              disabled={!draft.trim() || submitting || disconnected}
+              disabled={
+                (!draft.trim() && attachments.length === 0)
+                || submitting
+                || importingAttachments
+                || disconnected
+              }
               label={canSteer ? 'Send to working agent' : busy ? 'Queue message' : 'Send message'}
               onPress={() => void submit()}
               queueing={busy && !canSteer}
@@ -376,7 +601,20 @@ export function MobileComposer({
           </>
         )}
         value={draft}
-        onChangeText={setDraft}
+        onChangeText={(value) => {
+          draftDirty.current = true;
+          setDraft(value);
+        }}
+        onPasteError={(message) => {
+          setLocalError(message);
+          void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+        }}
+        onPasteFiles={(files) => {
+          void addLocalFiles(files).catch(async (cause) => {
+            setLocalError(cause instanceof Error ? cause.message : String(cause));
+            await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+          });
+        }}
       />
 
       <ModelSheet
@@ -387,14 +625,25 @@ export function MobileComposer({
         reasoningEffort={session.reasoning_effort ?? null}
         visible={modelSheetOpen}
       />
-      <AccessSheet
-        mode={session.runtime_mode}
-        onApply={(mode) => applyOptions({ runtimeMode: mode })}
-        onDismiss={() => setAccessSheetOpen(false)}
-        visible={accessSheetOpen}
-      />
     </View>
   );
+}
+
+function imagePickerFiles(
+  assets: ImagePicker.ImagePickerAsset[],
+  fallbackPrefix: string,
+): LocalAttachmentFile[] {
+  const timestamp = Date.now();
+  return assets.map((asset, index) => ({
+    uri: asset.uri,
+    name: asset.fileName ?? localFileName(
+      asset.uri,
+      `${fallbackPrefix}-${timestamp}${assets.length > 1 ? `-${index + 1}` : ''}.jpg`,
+    ),
+    mimeType: asset.mimeType,
+    size: asset.fileSize,
+    base64: asset.base64,
+  }));
 }
 
 function PermissionPanel({
@@ -641,7 +890,6 @@ const styles = StyleSheet.create({
   shell: { paddingHorizontal: 12, paddingTop: 4 },
   card: {
     borderRadius: 26,
-    borderWidth: StyleSheet.hairlineWidth,
     paddingBottom: 8,
     paddingHorizontal: 10,
     paddingTop: 6,
@@ -654,6 +902,17 @@ const styles = StyleSheet.create({
     paddingHorizontal: 6,
     paddingVertical: 8,
   },
+  attachmentStrip: { gap: 6, paddingHorizontal: 4, paddingTop: 4 },
+  attachmentChip: {
+    alignItems: 'center',
+    borderRadius: Radius.small,
+    flexDirection: 'row',
+    gap: 6,
+    height: 30,
+    maxWidth: 190,
+    paddingHorizontal: 9,
+  },
+  attachmentName: { flexShrink: 1, fontSize: 12, fontWeight: '600' },
   toolbar: { alignItems: 'center', flexDirection: 'row', marginTop: 2 },
   toolbarSpacer: { flex: 1 },
   cluster: { alignItems: 'center', flexDirection: 'row', gap: 2 },
