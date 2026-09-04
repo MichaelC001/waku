@@ -300,9 +300,7 @@ function TerminalSession({ root }: { root: string }) {
             .notify(
               {
                 type: "writeTerminal",
-                // UIKit commits the software-keyboard Return as LF. A terminal
-                // Return is CR; without this the shell keeps the line pending.
-                data: nativeEvent.text === "\n" ? "DQ==" : nativeEvent.data,
+                data: nativeEvent.data,
               },
               terminalId,
               terminalId,
