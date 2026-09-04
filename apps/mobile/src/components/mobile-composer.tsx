@@ -31,13 +31,13 @@ import type { ComposerTextInputProps } from './composer-text-input.types';
 import { GlassSurface, liquidGlass } from './glass-surface';
 import { ModelSheet } from './session-option-sheets';
 import { MonoFont, NativeTint, Radius } from '@/constants/theme';
+import { useSyncedComposerDraft } from '@/hooks/use-synced-composer-draft';
 import { useTheme } from '@/hooks/use-theme';
 import {
   importLocalAttachment,
   localFileName,
   type LocalAttachmentFile,
 } from '@/lib/attachments';
-import { applyComposerDraftChanges, loadComposerDrafts } from '@/lib/daemon-api';
 import { useDaemon } from '@/lib/daemon-context';
 import { sessionBusy } from '@/lib/mobile-runtime';
 import { useRuntime } from '@/lib/runtime-context';
@@ -183,7 +183,6 @@ export function MobileComposer({
   const runtime = useRuntime();
   const [draft, setDraft] = useState('');
   const [attachments, setAttachments] = useState<MessageAttachment[]>([]);
-  const [draftHydrated, setDraftHydrated] = useState(false);
   const [importingAttachments, setImportingAttachments] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
@@ -208,74 +207,24 @@ export function MobileComposer({
   }, [connected, localError]);
 
   // Cross-device draft, persisted on the daemon like the desktop composer:
-  // prefill once per session, save edits debounced, clear on send.
-  const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const draftLoadedFor = useRef<string | null>(null);
-  const draftDirty = useRef(false);
+  // hydrate when this surface becomes active, save only local edits, and
+  // clear on send. A daemon-loaded value must never be echoed back as an edit.
+  const draftSync = useSyncedComposerDraft({
+    target: { type: 'session', sessionId: session.id },
+    text: draft,
+    attachments,
+    onHydrate: (synchronized) => {
+      setDraft(synchronized.text);
+      setAttachments(synchronized.attachments);
+    },
+    flushOnUnmount: true,
+  });
   const activeSessionId = useRef(session.id);
   activeSessionId.current = session.id;
   const mounted = useRef(true);
   useEffect(() => () => {
     mounted.current = false;
   }, []);
-  const draftRef = useRef({ text: draft, attachments });
-  draftRef.current = { text: draft, attachments };
-  const draftClientRef = useRef(daemon.client);
-  draftClientRef.current = daemon.client;
-  const draftHydratedRef = useRef(draftHydrated);
-  draftHydratedRef.current = draftHydrated;
-  useEffect(() => {
-    const client = daemon.client;
-    if (!client || daemon.phase !== 'connected' || draftLoadedFor.current === session.id) return;
-    draftLoadedFor.current = session.id;
-    setDraftHydrated(false);
-    let cancelled = false;
-    void loadComposerDrafts(client).then((drafts) => {
-      if (cancelled) return;
-      const stored = drafts.sessions?.[session.id];
-      if (
-        stored
-        && !draftDirty.current
-        && !draftRef.current.text.trim()
-        && draftRef.current.attachments.length === 0
-      ) {
-        setDraft(stored.text ?? '');
-        setAttachments(stored.attachments ?? []);
-      }
-    }).catch(() => {}).finally(() => {
-      if (!cancelled) setDraftHydrated(true);
-    });
-    return () => {
-      cancelled = true;
-      if (draftLoadedFor.current === session.id) draftLoadedFor.current = null;
-    };
-  }, [daemon.client, daemon.phase, session.id]);
-  useEffect(() => {
-    const client = daemon.client;
-    if (!client || !draftHydrated || draftLoadedFor.current !== session.id) return;
-    if (draftTimer.current) clearTimeout(draftTimer.current);
-    draftTimer.current = setTimeout(() => {
-      void applyComposerDraftChanges(client, [{
-        target: { type: 'session', sessionId: session.id },
-        draft: draft.trim() || attachments.length ? { text: draft, attachments } : null,
-      }]).catch(() => {});
-    }, 800);
-    return () => {
-      if (draftTimer.current) clearTimeout(draftTimer.current);
-    };
-  }, [attachments, daemon.client, draft, draftHydrated, session.id]);
-  useEffect(() => () => {
-    if (draftTimer.current) clearTimeout(draftTimer.current);
-    const client = draftClientRef.current;
-    if (!client || (!draftHydratedRef.current && !draftDirty.current)) return;
-    const snapshot = draftRef.current;
-    void applyComposerDraftChanges(client, [{
-      target: { type: 'session', sessionId: session.id },
-      draft: snapshot.text.trim() || snapshot.attachments.length
-        ? { text: snapshot.text, attachments: snapshot.attachments }
-        : null,
-    }]).catch(() => {});
-  }, [session.id]);
 
   const attachmentImportTail = useRef<Promise<void>>(Promise.resolve());
   const pendingAttachmentImports = useRef(0);
@@ -294,7 +243,7 @@ export function MobileComposer({
       for (const file of files) {
         const imported = await importLocalAttachment(client, file);
         if (mounted.current && activeSessionId.current === targetSessionId) {
-          draftDirty.current = true;
+          draftSync.markEdited();
           setAttachments((current) => [...current, imported]);
         }
       }
@@ -380,17 +329,9 @@ export function MobileComposer({
     try {
       if (canSteer) await runtime.steerPrompt(session, prompt, submittedAttachments);
       else await runtime.sendPrompt(session, prompt, submittedAttachments);
-      draftDirty.current = false;
-      draftRef.current = { text: '', attachments: [] };
+      draftSync.removeSubmittedDraft();
       setDraft('');
       setAttachments([]);
-      if (draftTimer.current) clearTimeout(draftTimer.current);
-      if (daemon.client) {
-        void applyComposerDraftChanges(daemon.client, [{
-          target: { type: 'session', sessionId: session.id },
-          draft: null,
-        }]).catch(() => {});
-      }
       await Haptics.selectionAsync();
     } catch (cause) {
       setLocalError(cause instanceof Error ? cause.message : String(cause));
@@ -511,7 +452,7 @@ export function MobileComposer({
                 disabled={submitting}
                 key={`${attachment.blob_reference ?? attachment.path}:${index}`}
                 onPress={() => {
-                  draftDirty.current = true;
+                  draftSync.markEdited();
                   setAttachments((current) => current.filter((_, item) => item !== index));
                 }}
                 style={({ pressed }) => [
@@ -602,7 +543,7 @@ export function MobileComposer({
         )}
         value={draft}
         onChangeText={(value) => {
-          draftDirty.current = true;
+          draftSync.markEdited();
           setDraft(value);
         }}
         onPasteError={(message) => {

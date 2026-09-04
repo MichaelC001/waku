@@ -37,13 +37,9 @@ import {
 import { Sheet, SheetRow } from '@/components/sheet';
 import { Radius, Spacing } from '@/constants/theme';
 import { useAllProviderModels, useProviderCatalog, useTaskState } from '@/hooks/use-daemon-data';
+import { useSyncedComposerDraft } from '@/hooks/use-synced-composer-draft';
 import { useTheme } from '@/hooks/use-theme';
-import {
-  applyComposerDraftChanges,
-  daemonKeys,
-  inspectBranches,
-  loadComposerDrafts,
-} from '@/lib/daemon-api';
+import { daemonKeys, inspectBranches } from '@/lib/daemon-api';
 import {
   loadComposerPreferences,
   loadNewTaskExtras,
@@ -207,38 +203,17 @@ export default function NewTaskScreen() {
     serviceTier,
   ]);
 
-  // Cross-device draft: prefill from the daemon-persisted new-session draft
-  // for this project, and persist edits back, debounced.
-  const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const draftLoadedFor = useRef<string | null>(null);
-  const promptRef = useRef(prompt);
-  promptRef.current = prompt;
-  useEffect(() => {
-    const client = daemon.client;
-    const target = selectedProject?.id;
-    if (!client || daemon.phase !== 'connected' || !target) return;
-    if (draftLoadedFor.current === target) return;
-    draftLoadedFor.current = target;
-    void loadComposerDrafts(client).then((drafts) => {
-      const text = drafts.new_sessions?.[target]?.text;
-      if (text && !promptRef.current.trim()) setPrompt(text);
-    }).catch(() => {});
-  }, [daemon.client, daemon.phase, selectedProject?.id]);
-  useEffect(() => {
-    const client = daemon.client;
-    const target = selectedProject?.id;
-    if (!client || !target || draftLoadedFor.current !== target) return;
-    if (draftTimer.current) clearTimeout(draftTimer.current);
-    draftTimer.current = setTimeout(() => {
-      void applyComposerDraftChanges(client, [{
-        target: { type: 'newSession', projectId: target },
-        draft: prompt.trim() ? { text: prompt } : null,
-      }]).catch(() => {});
-    }, 800);
-    return () => {
-      if (draftTimer.current) clearTimeout(draftTimer.current);
-    };
-  }, [daemon.client, prompt, selectedProject?.id]);
+  // Cross-device draft: hydrate again whenever this surface becomes active,
+  // but persist only real local edits. Echoing a hydrated value would let a
+  // backgrounded mobile client resurrect it after desktop submits it.
+  const draftSync = useSyncedComposerDraft({
+    target: selectedProject
+      ? { type: 'newSession', projectId: selectedProject.id }
+      : null,
+    text: prompt,
+    carryAcrossTargets: true,
+    onHydrate: (synchronized) => setPrompt(synchronized.text),
+  });
 
   function pick(apply: () => void) {
     return () => {
@@ -321,13 +296,7 @@ export default function NewTaskScreen() {
           projectId: selectedProject.id,
         }).catch(() => {});
       }
-      if (draftTimer.current) clearTimeout(draftTimer.current);
-      if (daemon.client) {
-        void applyComposerDraftChanges(daemon.client, [{
-          target: { type: 'newSession', projectId: selectedProject.id },
-          draft: null,
-        }]).catch(() => {});
-      }
+      draftSync.removeSubmittedDraft();
       setPrompt('');
       setSubmitting(false);
       router.push({ pathname: '/session/[id]', params: { id: session.id } });
@@ -439,7 +408,10 @@ export default function NewTaskScreen() {
             </>
           )}
           value={prompt}
-          onChangeText={setPrompt}
+          onChangeText={(value) => {
+            draftSync.markEdited();
+            setPrompt(value);
+          }}
         />
       </View>
 
