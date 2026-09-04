@@ -13,7 +13,6 @@ import {
   groupSessions,
   relativeSessionTime,
   sessionDateGroup,
-  sessionIsRunning,
   stabilizeTranscriptRows,
 } from './session-presentation';
 
@@ -51,18 +50,6 @@ describe('mobile session presentation', () => {
     expect(sessionDateGroup(epoch(2026, 7, 1, 12), now)).toBe('month');
     expect(sessionDateGroup(epoch(2026, 0, 1, 12), now)).toBe('year');
     expect(sessionDateGroup(epoch(2025, 11, 31, 12), now)).toBe('more');
-  });
-
-  test('stops showing a task as running when its hydrated turn has settled', () => {
-    expect(sessionIsRunning(session({ status: 'working', turns: [] }))).toBe(true);
-    expect(sessionIsRunning(session({
-      status: 'working',
-      turns: [turn({ id: 'running', status: 'running' })],
-    }))).toBe(true);
-    expect(sessionIsRunning(session({
-      status: 'working',
-      turns: [turn({ id: 'completed', status: 'completed', completed_at: 20 })],
-    }))).toBe(false);
   });
 
   test('reports context usage as a bounded percentage', () => {

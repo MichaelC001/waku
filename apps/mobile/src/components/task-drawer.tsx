@@ -36,15 +36,15 @@ import { ProviderIcon } from '@/components/provider-icon';
 import { RenameDialog } from '@/components/rename-dialog';
 import { TaskRowMenu } from '@/components/task-row-menu';
 import { NativeTint, Radius, Spacing } from '@/constants/theme';
-import { useSession, useTaskState } from '@/hooks/use-daemon-data';
+import { useTaskState } from '@/hooks/use-daemon-data';
 import { useTheme } from '@/hooks/use-theme';
 import { useDaemon } from '@/lib/daemon-context';
+import { sessionIsRunning } from '@/lib/mobile-runtime';
 import { useRuntime } from '@/lib/runtime-context';
 import {
   displaySessionTitle,
   groupSessions,
   providerLabel,
-  sessionIsRunning,
   type SessionListItem,
 } from '@/lib/session-presentation';
 
@@ -132,22 +132,16 @@ function TaskDrawerContent({
   const daemon = useDaemon();
   const runtime = useRuntime();
   const taskState = useTaskState();
-  const selectedSession = useSession(selectedSessionId ?? undefined).data;
   const [search, setSearch] = useState('');
   const [refreshing, setRefreshing] = useState(false);
   const [daemonPickerOpen, setDaemonPickerOpen] = useState(false);
   const [renameTarget, setRenameTarget] = useState<AgentSession | null>(null);
   const visibleSessions = useMemo(() => {
     if (!taskState.data) return [];
-    const sessions = selectedSession
-      ? taskState.data.sessions.map((session) => (
-          session.id === selectedSession.id ? selectedSession : session
-        ))
-      : taskState.data.sessions;
     const query = search.trim().toLocaleLowerCase();
-    if (!query) return sessions;
+    if (!query) return taskState.data.sessions;
     const projects = new Map(taskState.data.projects.map((project) => [project.id, project]));
-    return sessions.filter((session) => {
+    return taskState.data.sessions.filter((session) => {
       const project = projects.get(session.project_id);
       return [
         displaySessionTitle(session),
@@ -157,7 +151,7 @@ function TaskDrawerContent({
         session.model,
       ].some((value) => value?.toLocaleLowerCase().includes(query));
     });
-  }, [search, selectedSession, taskState.data]);
+  }, [search, taskState.data]);
   const sections = useMemo(
     () => taskState.data ? groupSessions(taskState.data.projects, visibleSessions) : [],
     [taskState.data, visibleSessions],
@@ -220,6 +214,7 @@ function TaskDrawerContent({
 
       <SectionList
         sections={sections}
+        extraData={runtime.runtimes}
         keyExtractor={(item) => item.session.id}
         contentContainerStyle={[
           styles.listContent,
@@ -246,6 +241,7 @@ function TaskDrawerContent({
           <SessionRow
             drawerWidth={drawerWidth}
             item={item}
+            running={runtime.runtimes[item.session.id]?.running ?? sessionIsRunning(item.session)}
             selected={item.session.id === selectedSessionId}
             onDelete={() => confirmDelete(item.session)}
             onRename={() => setRenameTarget(item.session)}
@@ -448,6 +444,7 @@ function TaskListEmpty({
 function SessionRow({
   drawerWidth,
   item,
+  running,
   selected,
   onDelete,
   onRename,
@@ -455,6 +452,7 @@ function SessionRow({
 }: {
   drawerWidth: number;
   item: SessionListItem;
+  running: boolean;
   selected: boolean;
   onDelete: () => void;
   onRename: () => void;
@@ -463,7 +461,6 @@ function SessionRow({
   const theme = useTheme();
   const rowWidth = Math.max(0, drawerWidth - 24);
   const session = item.session;
-  const running = sessionIsRunning(session);
   return (
     <TaskRowMenu
       accessibilityLabel={`${displaySessionTitle(session)}, ${providerLabel(session.provider)} in ${item.projectName}${running ? ', Running' : ''}`}

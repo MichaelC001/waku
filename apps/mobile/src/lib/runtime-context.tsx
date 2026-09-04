@@ -43,6 +43,7 @@ import {
   queueSubmission,
   sessionBusy,
   sessionCwd,
+  sessionIsRunning,
   shouldApplyRuntimeEvent,
   submittedTurnIdentity,
   type NewSessionOptions,
@@ -57,6 +58,7 @@ export interface MobileRuntime {
   runtimeId: string;
   supportsSteer: boolean;
   starting: boolean;
+  running: boolean;
 }
 
 interface RuntimeEntry extends MobileRuntime {
@@ -181,6 +183,12 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
       session.id,
       (cacheGenerations.current.get(session.id) ?? 0) + 1,
     );
+    const entry = entries.current.get(session.id);
+    const running = sessionIsRunning(session);
+    if (entry && entry.running !== running) {
+      entry.running = running;
+      setRuntimes((current) => ({ ...current, [session.id]: publicRuntime(entry) }));
+    }
     writeSessionCache(session);
   }, [writeSessionCache]);
 
@@ -305,6 +313,7 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
       runtimeId,
       supportsSteer,
       starting,
+      running: sessionIsRunning(session),
       lastDriverError: null,
       unsubscribe: () => {},
       pending: [],
@@ -942,6 +951,7 @@ function publicRuntime(entry: RuntimeEntry): MobileRuntime {
     runtimeId: entry.runtimeId,
     supportsSteer: entry.supportsSteer,
     starting: entry.starting,
+    running: entry.running,
   };
 }
 

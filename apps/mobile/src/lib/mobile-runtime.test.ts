@@ -9,6 +9,7 @@ import {
   runtimeEventAlreadyApplied,
   sessionBusy,
   sessionCwd,
+  sessionIsRunning,
   shouldApplyRuntimeEvent,
 } from './mobile-runtime';
 
@@ -147,6 +148,36 @@ describe('mobile runtime projection', () => {
     }]);
     expect(queued.updated_at).toBe(99);
     expect(busy.queued_messages ?? []).toEqual([]);
+  });
+
+  test('uses a hydrated turn to correct a lagging running status', () => {
+    expect(sessionIsRunning(session({ status: 'working', turns: [] }))).toBe(true);
+    expect(sessionIsRunning(session({
+      status: 'working',
+      turns: [{
+        id: 'running',
+        turn_count: 1,
+        status: 'running',
+        provider_turn_started: true,
+        provider_resume_at: null,
+        started_at: 10,
+        completed_at: null,
+        checkpoint: null,
+      }],
+    }))).toBe(true);
+    expect(sessionIsRunning(session({
+      status: 'working',
+      turns: [{
+        id: 'completed',
+        turn_count: 1,
+        status: 'completed',
+        provider_turn_started: true,
+        provider_resume_at: null,
+        started_at: 10,
+        completed_at: 20,
+        checkpoint: null,
+      }],
+    }))).toBe(false);
   });
 
   test('retains attachments in a queued submission', () => {

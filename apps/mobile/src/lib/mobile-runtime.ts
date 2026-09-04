@@ -176,6 +176,16 @@ export function sessionBusy(session: Pick<AgentSession, 'status'>): boolean {
   );
 }
 
+/** A list projection has no turns, so its status is the best available
+ * signal. Once hydrated, a settled latest turn wins over a lagging status. */
+export function sessionIsRunning(
+  session: Pick<AgentSession, 'status' | 'turns'>,
+): boolean {
+  if (session.status !== 'connecting' && session.status !== 'working') return false;
+  const latestTurn = session.turns.at(-1);
+  return !latestTurn || latestTurn.status === 'running';
+}
+
 export interface SessionOptionChanges {
   model?: string | null;
   reasoningEffort?: string | null;
